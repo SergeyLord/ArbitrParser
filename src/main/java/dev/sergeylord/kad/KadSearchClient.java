@@ -231,10 +231,81 @@ public final class KadSearchClient implements AutoCloseable {
                     judge,
                     date,
                     rolloverParties(tr.select("td.plaintiff .js-rolloverHtml")),
-                    rolloverParties(tr.select("td.respondent .js-rolloverHtml"))
+                    rolloverParties(tr.select("td.respondent .js-rolloverHtml")),
+                    ""
             ));
         }
         return cases;
+    }
+
+    /**
+     * Для каждого дела открывает карточку и достаёт дату/время заседания.
+     * Прогресс: current = 1..N по карточкам.
+     */
+    public List<KadCase> enrichWithHearings(List<KadCase> cases, ProgressListener progress) {
+        ensureWarm();
+        List<KadCase> out = new ArrayList<>(cases.size());
+        int total = cases.size();
+        for (int i = 0; i < total; i++) {
+            KadCase c = cases.get(i);
+            if (progress != null) {
+                progress.onProgress(i + 1, total,
+                        "Карточка " + (i + 1) + " из " + total
+                                + (c.caseNumber().isBlank() ? "" : ": " + c.caseNumber()));
+            }
+            String hearing = "";
+            if (c.caseId() != null && !c.caseId().isBlank()) {
+                try {
+                    hearing = fetchHearingFromCard(c.caseId());
+                } catch (Exception e) {
+                    System.out.println("Hearing failed for " + c.caseNumber() + ": " + e.getMessage());
+                }
+                page.waitForTimeout(700);
+            }
+            out.add(c.withNextHearing(hearing));
+        }
+        if (progress != null && total > 0) {
+            progress.onProgress(total, total, "Карточки обработаны: " + total);
+        }
+        return out;
+    }
+
+    private String fetchHearingFromCard(String caseId) {
+        page.navigate("https://kad.arbitr.ru/Card/" + caseId, new Page.NavigateOptions()
+                .setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
+        try {
+            page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+        } catch (Exception ignored) {
+        }
+        page.waitForTimeout(1_200);
+        dismissPromoModal();
+
+        Object raw = page.evaluate(
+                """
+                () => {
+                  const text = document.body ? (document.body.innerText || '') : '';
+                  const patterns = [
+                    /Следующее заседание:\\s*([0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]{4}\\s*,?\\s*[0-9]{1,2}:[0-9]{2})/i,
+                    /Следующее заседание:\\s*([0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]{4})/i,
+                    /Дата и время судебного заседания\\s*([0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]{4}\\s*,?\\s*[0-9]{1,2}:[0-9]{2})/i,
+                    /судебного заседания\\s*([0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]{4}\\s*,\\s*[0-9]{1,2}:[0-9]{2})/i
+                  ];
+                  for (const p of patterns) {
+                    const m = text.match(p);
+                    if (m && m[1]) return m[1].replace(/\\s+/g, ' ').trim();
+                  }
+                  // ISO из возможных JSON-вставок на странице
+                  const iso = text.match(/"Start"\\s*:\\s*"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2})/);
+                  if (iso) {
+                    const [d, t] = iso[1].split('T');
+                    const [y, mo, da] = d.split('-');
+                    return da + '.' + mo + '.' + y + ', ' + t;
+                  }
+                  return '';
+                }
+                """
+        );
+        return raw == null ? "" : raw.toString().trim();
     }
 
     private static boolean looksLikeCourt(String value) {

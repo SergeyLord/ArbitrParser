@@ -14,9 +14,11 @@ import javafx.collections.ObservableList;
 import javafx.concurrent.Task;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.application.Platform;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
+import javafx.scene.control.ProgressBar;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextField;
@@ -49,6 +51,8 @@ public final class MainView {
     private final TextField innField = new TextField();
     private final TextField excelField = new TextField();
     private final Label statusLabel = new Label("");
+    private final Label progressLabel = new Label("");
+    private final ProgressBar progressBar = new ProgressBar(0);
     private final Button runButton = new Button("Запустить прогон");
     private final ObservableList<RunRecord> historyRows = FXCollections.observableArrayList();
     private final RunHistoryStore historyStore = new RunHistoryStore();
@@ -125,12 +129,24 @@ public final class MainView {
         rulesButton.getStyleClass().add("button-secondary");
         rulesButton.setOnAction(e -> RulesDialog.show(stage));
 
-        statusLabel.getStyleClass().add("status-muted");
+        Button excelButton = new Button("EXCEL");
+        excelButton.getStyleClass().add("button-secondary");
+        excelButton.setOnAction(e -> openExcelFile());
 
-        HBox actions = new HBox(12, runButton, rulesButton, statusLabel);
+        statusLabel.getStyleClass().add("status-muted");
+        progressLabel.getStyleClass().add("status-muted");
+        progressBar.setMaxWidth(Double.MAX_VALUE);
+        progressBar.setPrefHeight(14);
+        progressBar.setProgress(0);
+        progressBar.setVisible(false);
+        progressLabel.setVisible(false);
+        HBox.setHgrow(progressBar, Priority.ALWAYS);
+
+        HBox actions = new HBox(12, runButton, rulesButton, excelButton, statusLabel);
         actions.setAlignment(Pos.CENTER_LEFT);
 
-        formCard.getChildren().addAll(form, actions);
+        VBox progressBox = new VBox(4, progressLabel, progressBar);
+        formCard.getChildren().addAll(form, actions, progressBox);
 
         VBox historyCard = new VBox(10);
         historyCard.getStyleClass().add("card");
@@ -221,6 +237,19 @@ public final class MainView {
         }
     }
 
+    private void openExcelFile() {
+        String excelPath = excelField.getText() == null ? "" : excelField.getText().trim();
+        if (excelPath.isBlank() || !Files.isRegularFile(Path.of(excelPath))) {
+            alert("Сначала укажите существующий Excel-файл");
+            return;
+        }
+        try {
+            java.awt.Desktop.getDesktop().open(Path.of(excelPath).toFile());
+        } catch (Exception e) {
+            alert("Не удалось открыть файл: " + e.getMessage());
+        }
+    }
+
     private void startRun() {
         String inn = innField.getText() == null ? "" : innField.getText().trim();
         if (inn.isBlank()) {
@@ -236,7 +265,8 @@ public final class MainView {
         persistSettings();
 
         runButton.setDisable(true);
-        setStatus("running", "Прогон… открываю КАД");
+        showProgress(0, 1, "Открываю КАД…");
+        setStatus("running", "Прогон…");
 
         Task<RunRecord> task = new Task<>() {
             @Override
@@ -245,11 +275,26 @@ public final class MainView {
                 String startedIso = started.toString();
                 try (KadSearchClient client = new KadSearchClient(false)) {
                     updateMessage("Сессия КАД…");
+                    Platform.runLater(() -> showProgress(0, 1, "Сессия КАД…"));
                     client.warmUp();
+
                     updateMessage("Поиск дел…");
+                    Platform.runLater(() -> showProgress(0, 1, "Поиск дел…"));
                     List<KadCase> cases = client.searchByParticipant(inn, 1);
 
+                    updateMessage("Карточки дел…");
+                    cases = client.enrichWithHearings(cases, (current, total, msg) -> {
+                        updateMessage(msg);
+                        updateProgress(current, total);
+                        Platform.runLater(() -> showProgress(current, total, msg));
+                    });
+
+                    long withHearing = cases.stream()
+                            .filter(c -> c.nextHearing() != null && !c.nextHearing().isBlank())
+                            .count();
+
                     updateMessage("Запись в Excel…");
+                    Platform.runLater(() -> showProgress(1, 1, "Запись в Excel…"));
                     int written = StatusExcelWriter.write(Path.of(excelPath), cases, inn);
                     Instant finished = Instant.now();
 
@@ -262,7 +307,9 @@ public final class MainView {
                             "OK",
                             cases.size(),
                             Duration.between(started, finished).toMillis(),
-                            "Дел: " + cases.size() + ", записано строк: " + written
+                            "Дел: " + cases.size()
+                                    + ", заседаний найдено: " + withHearing
+                                    + ", строк в Excel: " + written
                                     + " → " + Path.of(excelPath).getFileName()
                     );
                 } catch (Exception e) {
@@ -293,6 +340,7 @@ public final class MainView {
             historyStore.add(record);
             reloadHistory();
             runButton.setDisable(false);
+            hideProgress();
             if ("OK".equals(record.status())) {
                 setStatus("ok", record.message());
             } else {
@@ -302,6 +350,7 @@ public final class MainView {
 
         task.setOnFailed(e -> {
             runButton.setDisable(false);
+            hideProgress();
             Throwable err = task.getException();
             setStatus("error", err == null ? "Ошибка" : err.getMessage());
         });
@@ -330,6 +379,22 @@ public final class MainView {
             default -> statusLabel.getStyleClass().add("status-muted");
         }
         statusLabel.setText(text);
+    }
+
+    private void showProgress(int current, int total, String message) {
+        progressBar.setVisible(true);
+        progressLabel.setVisible(true);
+        double pct = total <= 0 ? 0 : (double) current / (double) total;
+        progressBar.setProgress(Math.max(0, Math.min(1, pct)));
+        int percent = (int) Math.round(pct * 100);
+        progressLabel.setText(message + "  —  " + current + " / " + total + " (" + percent + "%)");
+    }
+
+    private void hideProgress() {
+        progressBar.setProgress(0);
+        progressBar.setVisible(false);
+        progressLabel.setVisible(false);
+        progressLabel.setText("");
     }
 
     private void alert(String msg) {

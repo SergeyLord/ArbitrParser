@@ -40,3 +40,12 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+
+### App data / Excel ###
+data/*.xlsx
+data/*.xls
+*.xlsx
+!data/.gitkeep
+
+### Local app state ###
+.ArbitrParser/

@@ -6,7 +6,6 @@ import com.microsoft.playwright.BrowserType;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
-import com.microsoft.playwright.Request;
 import com.microsoft.playwright.Response;
 import com.microsoft.playwright.options.LoadState;
 import com.microsoft.playwright.options.WaitUntilState;
@@ -201,14 +200,27 @@ public final class KadSearchClient implements AutoCloseable {
             String court = "";
             String judge = "";
             Elements courtDivs = tr.select("td.court .b-container > div");
-            if (!courtDivs.isEmpty()) {
-                court = courtDivs.get(0).attr("title");
-                if (court.isBlank()) {
-                    court = courtDivs.get(0).text().trim();
+            for (Element div : courtDivs) {
+                String title = div.attr("title").trim();
+                String text = div.text().trim();
+                String candidate = !title.isBlank() ? title : text;
+                if (candidate.isBlank()) {
+                    continue;
+                }
+                if (looksLikeCourt(candidate)) {
+                    if (court.isBlank()) {
+                        court = candidate;
+                    }
+                } else if (judge.isBlank()) {
+                    judge = candidate;
                 }
             }
-            if (courtDivs.size() >= 2) {
-                judge = courtDivs.get(1).text().trim();
+            if (court.isBlank() && !courtDivs.isEmpty()) {
+                Element first = courtDivs.first();
+                court = first.attr("title");
+                if (court.isBlank()) {
+                    court = first.text().trim();
+                }
             }
 
             cases.add(new KadCase(
@@ -218,15 +230,20 @@ public final class KadSearchClient implements AutoCloseable {
                     court,
                     judge,
                     date,
-                    rolloverNames(tr.select("td.plaintiff .js-rolloverHtml")),
-                    rolloverNames(tr.select("td.respondent .js-rolloverHtml"))
+                    rolloverParties(tr.select("td.plaintiff .js-rolloverHtml")),
+                    rolloverParties(tr.select("td.respondent .js-rolloverHtml"))
             ));
         }
         return cases;
     }
 
-    private static List<String> rolloverNames(Elements rollovers) {
-        List<String> names = new ArrayList<>();
+    private static boolean looksLikeCourt(String value) {
+        String v = value.toLowerCase();
+        return v.contains("арбитраж") || v.startsWith("ас ") || v.contains("ас г") || v.contains("суд");
+    }
+
+    private static List<Party> rolloverParties(Elements rollovers) {
+        List<Party> parties = new ArrayList<>();
         for (Element el : rollovers) {
             Element strong = el.selectFirst("strong");
             String name = strong != null ? strong.text().trim() : "";
@@ -237,14 +254,14 @@ public final class KadSearchClient implements AutoCloseable {
             for (Element div : el.select("div")) {
                 String t = div.ownText().isBlank() ? div.text() : div.ownText();
                 if (t.contains("ИНН")) {
-                    inn = t.replace("ИНН:", "").replace("ИНН", "").trim();
+                    inn = t.replace("ИНН:", "").replace("ИНН", "").replaceAll("[^0-9]", "");
                 }
             }
             if (!name.isBlank()) {
-                names.add(inn.isBlank() ? name : name + " (INN " + inn + ")");
+                parties.add(new Party(name, inn));
             }
         }
-        return names;
+        return parties;
     }
 
     private static int readHiddenInt(String html, String id) {

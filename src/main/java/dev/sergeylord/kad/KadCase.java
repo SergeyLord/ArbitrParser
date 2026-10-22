@@ -10,7 +10,7 @@ public record KadCase(
         String courtName,
         String judge,
         String date,
-        List<String> plaintiffs,
-        List<String> respondents
+        List<Party> plaintiffs,
+        List<Party> respondents
 ) {
 }

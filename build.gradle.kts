@@ -38,6 +38,7 @@ dependencies {
     implementation("com.microsoft.playwright:playwright:1.49.0")
     implementation("com.google.code.gson:gson:2.11.0")
     implementation("org.jsoup:jsoup:1.18.3")
+    implementation("org.apache.poi:poi-ooxml:5.3.0")
 
     testImplementation(platform("org.junit:junit-bom:5.10.0"))
     testImplementation("org.junit.jupiter:junit-jupiter")

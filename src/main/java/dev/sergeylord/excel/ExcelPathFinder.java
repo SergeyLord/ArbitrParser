@@ -2,7 +2,6 @@ package dev.sergeylord.excel;
 
 import dev.sergeylord.config.AppDefaults;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -13,7 +12,7 @@ import java.util.Set;
 
 /**
  * Ищет «Статус по искам.xlsx» в безопасных папках.
- * Не обходит весь user.home — там junction'ы вроде Application Data → AccessDenied.
+ * Рабочий стол — в приоритете (Desktop / Рабочий стол / OneDrive).
  */
 public final class ExcelPathFinder {
 
@@ -47,23 +46,46 @@ public final class ExcelPathFinder {
 
     private static List<Path> candidateDirs() {
         Set<Path> dirs = new LinkedHashSet<>();
+
+        String home = firstNonBlank(System.getProperty("user.home"), System.getenv("USERPROFILE"));
+        if (home != null) {
+            Path homePath = Path.of(home);
+            // Сначала рабочий стол (EN / RU / OneDrive)
+            add(dirs, homePath.resolve("Desktop"));
+            add(dirs, homePath.resolve("Рабочий стол"));
+            add(dirs, homePath.resolve("OneDrive").resolve("Desktop"));
+            add(dirs, homePath.resolve("OneDrive").resolve("Рабочий стол"));
+            // Иногда OneDrive в другом корне
+            String oneDrive = System.getenv("OneDrive");
+            if (oneDrive != null && !oneDrive.isBlank()) {
+                Path od = Path.of(oneDrive);
+                add(dirs, od.resolve("Desktop"));
+                add(dirs, od.resolve("Рабочий стол"));
+            }
+        }
+
+        // Общий рабочий стол
+        String publicDir = System.getenv("PUBLIC");
+        if (publicDir != null && !publicDir.isBlank()) {
+            add(dirs, Path.of(publicDir).resolve("Desktop"));
+            add(dirs, Path.of(publicDir).resolve("Рабочий стол"));
+        }
+
         add(dirs, Path.of("").toAbsolutePath().normalize());
         add(dirs, Path.of(System.getProperty("user.dir", ".")).toAbsolutePath().normalize());
 
-        String home = System.getProperty("user.home");
-        if (home != null && !home.isBlank()) {
+        if (home != null) {
             Path homePath = Path.of(home);
-            // Только явные «обычные» папки — без обхода всего профиля
-            add(dirs, homePath.resolve("Desktop"));
             add(dirs, homePath.resolve("Documents"));
+            add(dirs, homePath.resolve("Документы"));
             add(dirs, homePath.resolve("Downloads"));
+            add(dirs, homePath.resolve("Загрузки"));
             add(dirs, homePath.resolve("OneDrive"));
-            add(dirs, homePath.resolve("OneDrive").resolve("Desktop"));
             add(dirs, homePath.resolve("OneDrive").resolve("Documents"));
-            add(dirs, homePath.resolve("OneDrive").resolve("Downloads"));
+            add(dirs, homePath.resolve("OneDrive").resolve("Документы"));
         }
 
-        // Рядом с jar / exe (jpackage: .../app → родитель = корень образа)
+        // Рядом с jar / exe
         try {
             var location = ExcelPathFinder.class.getProtectionDomain().getCodeSource().getLocation();
             if (location != null) {
@@ -80,6 +102,16 @@ public final class ExcelPathFinder {
         }
 
         return new ArrayList<>(dirs);
+    }
+
+    private static String firstNonBlank(String a, String b) {
+        if (a != null && !a.isBlank()) {
+            return a;
+        }
+        if (b != null && !b.isBlank()) {
+            return b;
+        }
+        return null;
     }
 
     private static void add(Set<Path> dirs, Path path) {

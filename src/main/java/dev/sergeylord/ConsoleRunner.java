@@ -51,8 +51,14 @@ public final class ConsoleRunner {
                         "%d) %s | %s | type=%s | date=%s%n",
                         i++, c.caseNumber(), c.courtName(), c.caseType(), c.date()
                 ));
-                out.append("   plaintiffs:  ").append(String.join("; ", c.plaintiffs())).append('\n');
-                out.append("   respondents: ").append(String.join("; ", c.respondents())).append('\n');
+                out.append("   plaintiffs:  ").append(
+                        c.plaintiffs().stream().map(dev.sergeylord.kad.Party::display)
+                                .reduce((a, b) -> a + "; " + b).orElse("")
+                ).append('\n');
+                out.append("   respondents: ").append(
+                        c.respondents().stream().map(dev.sergeylord.kad.Party::display)
+                                .reduce((a, b) -> a + "; " + b).orElse("")
+                ).append('\n');
             }
             System.out.println(out);
             Path resultFile = Path.of("build", "kad-debug", "result.txt");

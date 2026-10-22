@@ -3,6 +3,7 @@ package dev.sergeylord.ui;
 import dev.sergeylord.config.AppDefaults;
 import dev.sergeylord.config.UserSettings;
 import dev.sergeylord.excel.ExcelPathFinder;
+import dev.sergeylord.excel.StatusExcelWriter;
 import dev.sergeylord.history.RunHistoryStore;
 import dev.sergeylord.history.RunRecord;
 import dev.sergeylord.kad.KadCase;
@@ -47,7 +48,7 @@ public final class MainView {
     private final BorderPane root = new BorderPane();
     private final TextField innField = new TextField();
     private final TextField excelField = new TextField();
-    private final Label statusLabel = new Label("Готово");
+    private final Label statusLabel = new Label("");
     private final Button runButton = new Button("Запустить прогон");
     private final ObservableList<RunRecord> historyRows = FXCollections.observableArrayList();
     private final RunHistoryStore historyStore = new RunHistoryStore();
@@ -120,9 +121,13 @@ public final class MainView {
         runButton.setPrefWidth(180);
         runButton.setOnAction(e -> startRun());
 
+        Button rulesButton = new Button("ПРАВИЛА");
+        rulesButton.getStyleClass().add("button-secondary");
+        rulesButton.setOnAction(e -> RulesDialog.show(stage));
+
         statusLabel.getStyleClass().add("status-muted");
 
-        HBox actions = new HBox(12, runButton, statusLabel);
+        HBox actions = new HBox(12, runButton, rulesButton, statusLabel);
         actions.setAlignment(Pos.CENTER_LEFT);
 
         formCard.getChildren().addAll(form, actions);
@@ -224,6 +229,10 @@ public final class MainView {
         }
 
         String excelPath = excelField.getText() == null ? "" : excelField.getText().trim();
+        if (excelPath.isBlank() || !Files.isRegularFile(Path.of(excelPath))) {
+            alert("Укажите существующий Excel-файл («" + AppDefaults.EXCEL_FILE_NAME + "»)");
+            return;
+        }
         persistSettings();
 
         runButton.setDisable(true);
@@ -239,11 +248,10 @@ public final class MainView {
                     client.warmUp();
                     updateMessage("Поиск дел…");
                     List<KadCase> cases = client.searchByParticipant(inn, 1);
-                    Instant finished = Instant.now();
 
-                    String excelNote = excelPath.isBlank()
-                            ? "Excel не выбран (запись пока отключена)"
-                            : "Excel: " + Path.of(excelPath).getFileName() + " (запись пока отключена)";
+                    updateMessage("Запись в Excel…");
+                    int written = StatusExcelWriter.write(Path.of(excelPath), cases, inn);
+                    Instant finished = Instant.now();
 
                     return new RunRecord(
                             UUID.randomUUID().toString(),
@@ -254,7 +262,8 @@ public final class MainView {
                             "OK",
                             cases.size(),
                             Duration.between(started, finished).toMillis(),
-                            "Получено дел: " + cases.size() + ". " + excelNote
+                            "Дел: " + cases.size() + ", записано строк: " + written
+                                    + " → " + Path.of(excelPath).getFileName()
                     );
                 } catch (Exception e) {
                     Instant finished = Instant.now();

@@ -18,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -64,7 +65,7 @@ public final class KadSearchClient implements AutoCloseable {
                 .setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
         System.out.println("HTTP navigate: " + (nav == null ? "?" : nav.status()));
         page.waitForLoadState(LoadState.DOMCONTENTLOADED);
-        page.waitForTimeout(2_000);
+        humanPause(1_500, 3_000);
         dismissPromoModal();
         System.out.println("Title: " + page.title());
         dumpDebug("warmup");
@@ -112,7 +113,7 @@ public final class KadSearchClient implements AutoCloseable {
         for (int p = 2; p <= pagesToLoad; p++) {
             final int pageNum = p;
             System.out.println("Loading page " + pageNum + "...");
-            page.waitForTimeout(1_200);
+            humanPause(900, 2_000);
             Response next = page.waitForResponse(
                     r -> r.url().contains("SearchInstances") && r.request().method().equalsIgnoreCase("POST"),
                     () -> page.locator("#pages a[href='#page" + pageNum + "']").first().click()
@@ -136,17 +137,19 @@ public final class KadSearchClient implements AutoCloseable {
         // Важно: pressSequentially шлёт keydown/keyup — fill() КАД часто игнорирует
         textarea.press("Control+A");
         textarea.press("Backspace");
-        textarea.pressSequentially(innOrName, new Locator.PressSequentiallyOptions().setDelay(40));
-        page.waitForTimeout(500);
+        // Печать «как человек»: разный интервал между символами
+        textarea.pressSequentially(innOrName, new Locator.PressSequentiallyOptions()
+                .setDelay(ThreadLocalRandom.current().nextInt(35, 90)));
+        humanPause(400, 900);
         textarea.press("Enter");
-        page.waitForTimeout(1_000);
+        humanPause(700, 1_500);
 
         int added = page.locator("#sug-participants .tag.added").count();
         System.out.println("Added tags count: " + added);
         if (added == 0) {
             System.out.println("No .tag.added — trying add icon");
             page.locator("#sug-participants i.b-icon.add").first().click();
-            page.waitForTimeout(800);
+            humanPause(600, 1_200);
             added = page.locator("#sug-participants .tag.added").count();
             System.out.println("Added tags after icon: " + added);
         }
@@ -157,7 +160,7 @@ public final class KadSearchClient implements AutoCloseable {
             if (item.count() > 0) {
                 System.out.println("Clicking suggest item");
                 item.click();
-                page.waitForTimeout(500);
+                humanPause(400, 900);
             }
         } catch (Exception ignored) {
         }
@@ -260,7 +263,8 @@ public final class KadSearchClient implements AutoCloseable {
                 } catch (Exception e) {
                     System.out.println("Hearing failed for " + c.caseNumber() + ": " + e.getMessage());
                 }
-                page.waitForTimeout(700);
+                // Главное антибот-место: пауза между карточками
+                humanPause(800, 2_400);
             }
             out.add(c.withNextHearing(hearing));
         }
@@ -277,7 +281,7 @@ public final class KadSearchClient implements AutoCloseable {
             page.waitForLoadState(LoadState.DOMCONTENTLOADED);
         } catch (Exception ignored) {
         }
-        page.waitForTimeout(1_200);
+        humanPause(900, 1_800);
         dismissPromoModal();
 
         Object raw = page.evaluate(
@@ -349,7 +353,7 @@ public final class KadSearchClient implements AutoCloseable {
 
     private void dismissPromoModal() {
         page.keyboard().press("Escape");
-        page.waitForTimeout(400);
+        humanPause(250, 600);
         try {
             page.locator(".b-promo-modal .b-promo-modal-close, .js-modal-close")
                     .first()
@@ -357,7 +361,15 @@ public final class KadSearchClient implements AutoCloseable {
         } catch (Exception ignored) {
         }
         page.keyboard().press("Escape");
-        page.waitForTimeout(400);
+        humanPause(250, 600);
+    }
+
+    /** Случайная пауза [minMs; maxMs), чтобы не стучать метрономом. */
+    private void humanPause(int minMs, int maxMs) {
+        int lo = Math.max(0, Math.min(minMs, maxMs));
+        int hi = Math.max(minMs, maxMs);
+        int ms = (hi <= lo) ? lo : ThreadLocalRandom.current().nextInt(lo, hi);
+        page.waitForTimeout(ms);
     }
 
     private void saveText(String name, String content) {

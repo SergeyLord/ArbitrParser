@@ -2,7 +2,7 @@ package dev.sergeylord.kad;
 
 import java.util.List;
 
-/** Карточка дела из выдачи КАД (+ опционально дата заседания с карточки). */
+/** Дело из списка КАД + поля с карточки (сумма иска; nextHearing пока не заполняем). */
 public record KadCase(
         String caseId,
         String caseNumber,
@@ -12,12 +12,15 @@ public record KadCase(
         String date,
         List<Party> plaintiffs,
         List<Party> respondents,
-        String nextHearing
+        String nextHearing,
+        String claimSum
 ) {
-    public KadCase withNextHearing(String hearing) {
+    public KadCase withCardDetails(String hearing, String claimSum) {
         return new KadCase(
                 caseId, caseNumber, caseType, courtName, judge, date,
-                plaintiffs, respondents, hearing == null ? "" : hearing
+                plaintiffs, respondents,
+                hearing == null ? "" : hearing,
+                claimSum == null ? "" : claimSum
         );
     }
 }

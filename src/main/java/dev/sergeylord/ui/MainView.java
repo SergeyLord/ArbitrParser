@@ -2,6 +2,7 @@ package dev.sergeylord.ui;
 
 import dev.sergeylord.config.AppDefaults;
 import dev.sergeylord.config.UserSettings;
+import dev.sergeylord.excel.ExcelFileGuard;
 import dev.sergeylord.excel.ExcelPathFinder;
 import dev.sergeylord.excel.StatusExcelWriter;
 import dev.sergeylord.history.RunHistoryStore;
@@ -17,6 +18,7 @@ import javafx.geometry.Pos;
 import javafx.application.Platform;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ProgressBar;
 import javafx.scene.control.TableColumn;
@@ -54,6 +56,7 @@ public final class MainView {
     private final Label progressLabel = new Label("");
     private final ProgressBar progressBar = new ProgressBar(0);
     private final Button runButton = new Button("Запустить прогон");
+    private final CheckBox only3Check = new CheckBox("только 3 дела");
     private final ObservableList<RunRecord> historyRows = FXCollections.observableArrayList();
     private final RunHistoryStore historyStore = new RunHistoryStore();
     private final UserSettings settings;
@@ -125,6 +128,10 @@ public final class MainView {
         runButton.setPrefWidth(180);
         runButton.setOnAction(e -> startRun());
 
+        only3Check.setSelected(true);
+        only3Check.setTooltip(new javafx.scene.control.Tooltip(
+                "Для проверки: после поиска берём только первые 3 дела"));
+
         Button rulesButton = new Button("ПРАВИЛА");
         rulesButton.getStyleClass().add("button-secondary");
         rulesButton.setOnAction(e -> RulesDialog.show(stage));
@@ -142,7 +149,7 @@ public final class MainView {
         progressLabel.setVisible(false);
         HBox.setHgrow(progressBar, Priority.ALWAYS);
 
-        HBox actions = new HBox(12, runButton, rulesButton, excelButton, statusLabel);
+        HBox actions = new HBox(12, runButton, only3Check, rulesButton, excelButton, statusLabel);
         actions.setAlignment(Pos.CENTER_LEFT);
 
         VBox progressBox = new VBox(4, progressLabel, progressBar);
@@ -262,11 +269,23 @@ public final class MainView {
             alert("Укажите существующий Excel-файл («" + AppDefaults.EXCEL_FILE_NAME + "»)");
             return;
         }
+        Path excel = Path.of(excelPath);
+        if (!ExcelFileGuard.isWritable(excel)) {
+            setStatus("running", "Закрываю Excel (с сохранением)…");
+            if (!ExcelFileGuard.ensureWritable(excel)) {
+                alert("Не удалось закрыть Excel-файл:\n" + excel.getFileName()
+                        + "\n\nЗакройте его вручную и повторите прогон.");
+                setStatus("idle", "");
+                return;
+            }
+        }
         persistSettings();
+
+        final boolean only3 = only3Check.isSelected();
 
         runButton.setDisable(true);
         showProgress(0, 1, "Открываю КАД…");
-        setStatus("running", "Прогон…");
+        setStatus("running", only3 ? "Прогон (только 3 дела)…" : "Прогон…");
 
         Task<RunRecord> task = new Task<>() {
             @Override
@@ -281,6 +300,10 @@ public final class MainView {
                     updateMessage("Поиск дел…");
                     Platform.runLater(() -> showProgress(0, 1, "Поиск дел…"));
                     List<KadCase> cases = client.searchByParticipant(inn, 1);
+                    if (only3 && cases.size() > 3) {
+                        cases = new java.util.ArrayList<>(cases.subList(0, 3));
+                        System.out.println("Test mode: only first 3 cases");
+                    }
 
                     updateMessage("Карточки дел…");
                     cases = client.enrichWithHearings(cases, (current, total, msg) -> {
@@ -288,10 +311,6 @@ public final class MainView {
                         updateProgress(current, total);
                         Platform.runLater(() -> showProgress(current, total, msg));
                     });
-
-                    long withHearing = cases.stream()
-                            .filter(c -> c.nextHearing() != null && !c.nextHearing().isBlank())
-                            .count();
 
                     updateMessage("Запись в Excel…");
                     Platform.runLater(() -> showProgress(1, 1, "Запись в Excel…"));
@@ -307,8 +326,8 @@ public final class MainView {
                             "OK",
                             cases.size(),
                             Duration.between(started, finished).toMillis(),
-                            "Дел: " + cases.size()
-                                    + ", заседаний найдено: " + withHearing
+                            (only3 ? "[тест 3] " : "")
+                                    + "Дел: " + cases.size()
                                     + ", строк в Excel: " + written
                                     + " → " + Path.of(excelPath).getFileName()
                     );

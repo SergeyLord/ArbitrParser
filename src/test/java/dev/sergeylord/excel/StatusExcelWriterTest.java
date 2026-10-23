@@ -38,7 +38,8 @@ class StatusExcelWriterTest {
                         "01.01.2026",
                         List.of(new Party("ООО Друг", "123")),
                         List.of(new Party("ООО РЕ ТРЭЙДИНГ", "7725776121")),
-                        "15.09.2026, 10:30"
+                        "15.09.2026, 10:30",
+                        "150000.50"
                 )
         );
 
@@ -66,7 +67,7 @@ class StatusExcelWriterTest {
             assertEquals("ООО Друг", fmt.formatCellValue(data.getCell(otherCol)));
             assertEquals("АС города Москвы", fmt.formatCellValue(data.getCell(courtCol)));
             assertEquals("1", fmt.formatCellValue(data.getCell(numCol)));
-            assertEquals("15.09.2026, 10:30", fmt.formatCellValue(data.getCell(15)));
+            assertEquals(150000.5, data.getCell(9).getNumericCellValue(), 0.001);
         }
         Files.deleteIfExists(copy);
     }

@@ -235,6 +235,7 @@ public final class KadSearchClient implements AutoCloseable {
                     date,
                     rolloverParties(tr.select("td.plaintiff .js-rolloverHtml")),
                     rolloverParties(tr.select("td.respondent .js-rolloverHtml")),
+                    "",
                     ""
             ));
         }
@@ -242,74 +243,87 @@ public final class KadSearchClient implements AutoCloseable {
     }
 
     /**
-     * Для каждого дела открывает карточку и достаёт дату/время заседания.
-     * Прогресс: current = 1..N по карточкам.
+     * 1) Открывает карточки во вкладках (пауза 0.2–0.5 с).
+     * 2) На каждой: bringToFront → ждать 1 с → закрыть.
+     * Парсинг хронологии / суммы иска / даты — временно отключён.
      */
     public List<KadCase> enrichWithHearings(List<KadCase> cases, ProgressListener progress) {
         ensureWarm();
-        List<KadCase> out = new ArrayList<>(cases.size());
         int total = cases.size();
+        int steps = Math.max(total * 2, 1);
+        List<Page> tabs = new ArrayList<>(total);
+
         for (int i = 0; i < total; i++) {
             KadCase c = cases.get(i);
             if (progress != null) {
-                progress.onProgress(i + 1, total,
-                        "Карточка " + (i + 1) + " из " + total
+                progress.onProgress(i + 1, steps,
+                        "Открываю вкладку " + (i + 1) + " из " + total
                                 + (c.caseNumber().isBlank() ? "" : ": " + c.caseNumber()));
             }
-            String hearing = "";
+            Page tab = null;
             if (c.caseId() != null && !c.caseId().isBlank()) {
                 try {
-                    hearing = fetchHearingFromCard(c.caseId());
+                    tab = context.newPage();
+                    tab.setDefaultTimeout(90_000);
+                    tab.navigate("https://kad.arbitr.ru/Card/" + c.caseId(),
+                            new Page.NavigateOptions().setWaitUntil(WaitUntilState.COMMIT));
                 } catch (Exception e) {
-                    System.out.println("Hearing failed for " + c.caseNumber() + ": " + e.getMessage());
+                    System.out.println("Open tab failed for " + c.caseNumber() + ": " + e.getMessage());
+                    closeQuietly(tab);
+                    tab = null;
                 }
-                // Главное антибот-место: пауза между карточками
-                humanPause(800, 2_400);
             }
-            out.add(c.withNextHearing(hearing));
+            tabs.add(tab);
+            humanPause(page, 200, 500);
         }
+
+        List<KadCase> out = new ArrayList<>(total);
+        try {
+            for (int i = 0; i < total; i++) {
+                KadCase c = cases.get(i);
+                if (progress != null) {
+                    progress.onProgress(total + i + 1, steps,
+                            "Карточка " + (i + 1) + " из " + total
+                                    + (c.caseNumber().isBlank() ? "" : ": " + c.caseNumber()));
+                }
+                Page tab = tabs.get(i);
+                if (tab != null) {
+                    try {
+                        tab.bringToFront();
+                        tab.waitForTimeout(1_000);
+                    } catch (Exception e) {
+                        System.out.println("Card visit failed for " + c.caseNumber() + ": " + e.getMessage());
+                    } finally {
+                        closeQuietly(tab);
+                        tabs.set(i, null);
+                    }
+                }
+                out.add(c.withCardDetails("", ""));
+            }
+        } finally {
+            for (Page tab : tabs) {
+                closeQuietly(tab);
+            }
+        }
+
         if (progress != null && total > 0) {
-            progress.onProgress(total, total, "Карточки обработаны: " + total);
+            progress.onProgress(steps, steps, "Карточки обработаны: " + total);
+        }
+        try {
+            page.bringToFront();
+        } catch (Exception ignored) {
         }
         return out;
     }
 
-    private String fetchHearingFromCard(String caseId) {
-        page.navigate("https://kad.arbitr.ru/Card/" + caseId, new Page.NavigateOptions()
-                .setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
+    private static void closeQuietly(Page tab) {
+        if (tab == null) {
+            return;
+        }
         try {
-            page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+            tab.close();
         } catch (Exception ignored) {
         }
-        humanPause(900, 1_800);
-        dismissPromoModal();
-
-        Object raw = page.evaluate(
-                """
-                () => {
-                  const text = document.body ? (document.body.innerText || '') : '';
-                  const patterns = [
-                    /Следующее заседание:\\s*([0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]{4}\\s*,?\\s*[0-9]{1,2}:[0-9]{2})/i,
-                    /Следующее заседание:\\s*([0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]{4})/i,
-                    /Дата и время судебного заседания\\s*([0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]{4}\\s*,?\\s*[0-9]{1,2}:[0-9]{2})/i,
-                    /судебного заседания\\s*([0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]{4}\\s*,\\s*[0-9]{1,2}:[0-9]{2})/i
-                  ];
-                  for (const p of patterns) {
-                    const m = text.match(p);
-                    if (m && m[1]) return m[1].replace(/\\s+/g, ' ').trim();
-                  }
-                  // ISO из возможных JSON-вставок на странице
-                  const iso = text.match(/"Start"\\s*:\\s*"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2})/);
-                  if (iso) {
-                    const [d, t] = iso[1].split('T');
-                    const [y, mo, da] = d.split('-');
-                    return da + '.' + mo + '.' + y + ', ' + t;
-                  }
-                  return '';
-                }
-                """
-        );
-        return raw == null ? "" : raw.toString().trim();
     }
 
     private static boolean looksLikeCourt(String value) {
@@ -352,24 +366,32 @@ public final class KadSearchClient implements AutoCloseable {
     }
 
     private void dismissPromoModal() {
-        page.keyboard().press("Escape");
-        humanPause(250, 600);
+        dismissPromoModal(page);
+    }
+
+    private void dismissPromoModal(Page target) {
+        target.keyboard().press("Escape");
+        humanPause(target, 200, 500);
         try {
-            page.locator(".b-promo-modal .b-promo-modal-close, .js-modal-close")
+            target.locator(".b-promo-modal .b-promo-modal-close, .js-modal-close")
                     .first()
                     .click(new Locator.ClickOptions().setTimeout(1_500));
         } catch (Exception ignored) {
         }
-        page.keyboard().press("Escape");
-        humanPause(250, 600);
+        target.keyboard().press("Escape");
+        humanPause(target, 200, 500);
     }
 
     /** Случайная пауза [minMs; maxMs), чтобы не стучать метрономом. */
     private void humanPause(int minMs, int maxMs) {
+        humanPause(page, minMs, maxMs);
+    }
+
+    private void humanPause(Page target, int minMs, int maxMs) {
         int lo = Math.max(0, Math.min(minMs, maxMs));
         int hi = Math.max(minMs, maxMs);
         int ms = (hi <= lo) ? lo : ThreadLocalRandom.current().nextInt(lo, hi);
-        page.waitForTimeout(ms);
+        target.waitForTimeout(ms);
     }
 
     private void saveText(String name, String content) {

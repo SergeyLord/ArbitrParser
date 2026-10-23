@@ -2,10 +2,12 @@ package dev.sergeylord.excel;
 
 import dev.sergeylord.kad.KadCase;
 import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.CellStyle;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.VerticalAlignment;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
 
@@ -74,16 +76,52 @@ public final class StatusExcelWriter {
                 setCell(row, cols.get("ourSide"), mapped.ourSide());
                 setCell(row, cols.get("otherSides"), mapped.otherSides());
                 setCell(row, cols.get("court"), mapped.court());
-                if (cols.containsKey("hearing")) {
-                    setCell(row, cols.get("hearing"), mapped.nextHearing());
+                // Дата очередного заседания — пока НЕ пишем (парсинг отключён)
+                if (cols.containsKey("claimSum")) {
+                    setClaimSumCell(row, cols.get("claimSum"), mapped.claimSum());
                 }
                 written++;
             }
+
+            enableWrapText(sheet);
 
             try (OutputStream out = Files.newOutputStream(excelFile)) {
                 workbook.write(out);
             }
             return written;
+        }
+    }
+
+    /** Включает перенос текста во всех ячейках используемой области листа. */
+    private static void enableWrapText(Sheet sheet) {
+        Workbook workbook = sheet.getWorkbook();
+        Map<Short, CellStyle> wrappedByIndex = new HashMap<>();
+        int lastRow = sheet.getLastRowNum();
+        for (int r = 0; r <= lastRow; r++) {
+            Row row = sheet.getRow(r);
+            if (row == null) {
+                continue;
+            }
+            short lastCell = row.getLastCellNum();
+            if (lastCell < 0) {
+                continue;
+            }
+            for (int c = 0; c < lastCell; c++) {
+                Cell cell = row.getCell(c);
+                if (cell == null) {
+                    continue;
+                }
+                CellStyle orig = cell.getCellStyle();
+                short idx = orig.getIndex();
+                CellStyle wrapped = wrappedByIndex.computeIfAbsent(idx, ignored -> {
+                    CellStyle style = workbook.createCellStyle();
+                    style.cloneStyleFrom(orig);
+                    style.setWrapText(true);
+                    style.setVerticalAlignment(VerticalAlignment.TOP);
+                    return style;
+                });
+                cell.setCellStyle(wrapped);
+            }
         }
     }
 
@@ -162,6 +200,9 @@ public final class StatusExcelWriter {
             } else if (raw.contains("очередного заседания") || raw.contains("дата и время заседания")
                     || (raw.contains("заседани") && raw.contains("дата"))) {
                 map.putIfAbsent("hearing", c);
+            } else if (raw.contains("цена иска") || raw.contains("сумма иска")
+                    || (raw.contains("исков") && raw.contains("руб"))) {
+                map.putIfAbsent("claimSum", c);
             }
         }
         // Жёсткие позиции шаблона TEMPLATE, если заголовки не распознались
@@ -169,6 +210,7 @@ public final class StatusExcelWriter {
         map.putIfAbsent("caseNumber", 1);
         map.putIfAbsent("ourSide", 2);
         map.putIfAbsent("otherSides", 3);
+        map.putIfAbsent("claimSum", 9); // колонка J — Цена иска, руб
         map.putIfAbsent("court", 14); // колонка O
         map.putIfAbsent("hearing", 15); // колонка P — Дата очередного заседания
         return map;
@@ -203,6 +245,23 @@ public final class StatusExcelWriter {
             cell = row.createCell(col, CellType.NUMERIC);
         }
         cell.setCellValue(value);
+    }
+
+    private static void setClaimSumCell(Row row, int col, String value) {
+        if (value == null || value.isBlank()) {
+            setCell(row, col, "");
+            return;
+        }
+        try {
+            double num = Double.parseDouble(value.replace(" ", "").replace(',', '.'));
+            Cell cell = row.getCell(col);
+            if (cell == null) {
+                cell = row.createCell(col, CellType.NUMERIC);
+            }
+            cell.setCellValue(num);
+        } catch (NumberFormatException e) {
+            setCell(row, col, value);
+        }
     }
 
     private static String normalize(String s) {

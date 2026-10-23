@@ -26,7 +26,7 @@ public class ArbitrFxApp extends Application {
         stage.show();
     }
 
-    /** Иконки с kad.arbitr.ru (favicon / apple-touch). */
+    /** Иконка приложения (орёл) в нескольких размерах. */
     private static List<Image> loadAppIcons() {
         String[] paths = {
                 "/dev/sergeylord/ui/icons/apple-icon-57x57.png",

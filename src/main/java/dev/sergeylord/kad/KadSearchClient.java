@@ -1,8 +1,13 @@
 package dev.sergeylord.kad;
 
+import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.BrowserType;
+import com.microsoft.playwright.CDPSession;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
@@ -14,11 +19,16 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -286,6 +296,7 @@ public final class KadSearchClient implements AutoCloseable {
                     rolloverParties(tr.select("td.plaintiff .js-rolloverHtml")),
                     rolloverParties(tr.select("td.respondent .js-rolloverHtml")),
                     "",
+                    "",
                     ""
             ));
         }
@@ -294,13 +305,25 @@ public final class KadSearchClient implements AutoCloseable {
 
     /** Сколько карточек держим открытыми одновременно (меньше нагрузка → меньше 429). */
     private static final int CARD_TAB_BATCH = 5;
+    private static final Gson GSON = new Gson();
 
     /**
      * Карточки пачками по {@link #CARD_TAB_BATCH}: открыл вкладки → прочитал → закрыл → следующая пачка.
-     * На каждой: дата из {@code .b-instanceAdditional}; плюсик хронологии → сумма из {@code .additional-info}.
+     * На каждой: дата из {@code .b-instanceAdditional}; плюсик хронологии → сумма + PDF в {@code docsDir}.
      */
     public List<KadCase> enrichWithHearings(List<KadCase> cases, ProgressListener progress) {
+        return enrichWithHearings(cases, null, progress);
+    }
+
+    public List<KadCase> enrichWithHearings(List<KadCase> cases, Path docsDir, ProgressListener progress) {
         ensureWarm();
+        if (docsDir != null) {
+            try {
+                Files.createDirectories(docsDir);
+            } catch (Exception e) {
+                System.out.println("Cannot create docs dir: " + e.getMessage());
+            }
+        }
         int total = cases.size();
         int steps = Math.max(total * 2, 1);
         List<KadCase> out = new ArrayList<>(total);
@@ -349,6 +372,7 @@ public final class KadSearchClient implements AutoCloseable {
                     }
                     String hearing = "";
                     String claimSum = "";
+                    String documents = "";
                     Page tab = tabs.get(i - batchStart);
                     if (tab != null) {
                         try {
@@ -362,13 +386,16 @@ public final class KadSearchClient implements AutoCloseable {
                             hearing = extractNextHearing(tab);
                             expandChronologyPlus(tab);
                             claimSum = extractClaimSum(tab);
+                            if (docsDir != null) {
+                                documents = downloadCaseDocuments(tab, docsDir, c.caseNumber());
+                            }
                             System.out.println("Hearing " + c.caseNumber() + " = [" + hearing + "], "
-                                    + "ClaimSum = [" + claimSum + "]");
+                                    + "ClaimSum = [" + claimSum + "], Docs = [" + documents + "]");
                         } catch (Exception e) {
                             System.out.println("Card visit failed for " + c.caseNumber() + ": " + e.getMessage());
                         }
                     }
-                    out.add(c.withCardDetails(hearing, claimSum));
+                    out.add(c.withCardDetails(hearing, claimSum, documents));
                 }
             } finally {
                 for (Page tab : tabs) {
@@ -420,38 +447,58 @@ public final class KadSearchClient implements AutoCloseable {
     }
 
     /**
-     * Плюсик: {@code <div class="b-collapse js-collapse" title="Нажмите, чтобы ознакомиться с полной хронологией дела.">}
+     * Плюсики хронологии по всем инстанциям:
+     * {@code <div class="b-collapse js-collapse" title="Нажмите, чтобы ознакомиться с полной хронологией дела.">}
      */
     private void expandChronologyPlus(Page card) {
         try {
-            Locator plus = card.locator(
-                    "div.b-collapse.js-collapse[title*='полной хронологией'], "
-                            + "div.b-collapse.js-collapse"
-            ).first();
-            plus.waitFor(new Locator.WaitForOptions().setTimeout(2_000));
-            plus.click(new Locator.ClickOptions().setTimeout(2_000));
-            card.waitForTimeout(300);
+            Locator pluses = card.locator("div.b-collapse.js-collapse");
+            int n = pluses.count();
+            if (n == 0) {
+                return;
+            }
+            for (int i = 0; i < n; i++) {
+                try {
+                    pluses.nth(i).click(new Locator.ClickOptions().setTimeout(2_000));
+                } catch (Exception e) {
+                    System.out.println("Chronology plus #" + (i + 1) + " failed: " + e.getMessage());
+                }
+            }
+            // хронология подгружается AJAX — без ожидания PdfDocument ещё нет в DOM
+            waitForChronologyDocuments(card);
         } catch (Exception e) {
             System.out.println("Chronology plus click failed: " + e.getMessage());
             try {
                 Object viaJs = card.evaluate(
                         """
                         () => {
-                          const el = document.querySelector(
-                            'div.b-collapse.js-collapse[title*="хронологией"]'
-                          ) || document.querySelector('div.b-collapse.js-collapse');
-                          if (!el) return 'none';
-                          el.click();
-                          return 'ok';
+                          const els = [...document.querySelectorAll('div.b-collapse.js-collapse')];
+                          if (!els.length) return 'none';
+                          els.forEach(el => el.click());
+                          return 'ok:' + els.length;
                         }
                         """
                 );
                 System.out.println("Chronology plus JS: " + viaJs);
-                card.waitForTimeout(300);
+                waitForChronologyDocuments(card);
             } catch (Exception e2) {
                 System.out.println("Chronology plus JS failed: " + e2.getMessage());
             }
         }
+    }
+
+    /** Ждём появления PDF/результатов после плюсика (AJAX). */
+    private void waitForChronologyDocuments(Page card) {
+        try {
+            card.locator(
+                    "a[href*='PdfDocument'], a.js-case-result-text--doc_link, "
+                            + "h2.b-case-result, .g-valid_sign.js-signers-rollover"
+            ).first().waitFor(new Locator.WaitForOptions().setTimeout(10_000));
+        } catch (Exception e) {
+            System.out.println("Chronology docs wait: " + e.getMessage());
+            card.waitForTimeout(1_200);
+        }
+        card.waitForTimeout(400);
     }
 
     /**
@@ -486,6 +533,221 @@ public final class KadSearchClient implements AutoCloseable {
                 """
         );
         return raw == null ? "" : raw.toString().trim();
+    }
+
+    /**
+     * PDF после плюсика: ссылки {@code a.js-case-result-text--doc_link} (рядом title
+     * {@code .js-judges-rollover} и часто {@code .g-valid_sign} «[Подписано]»).
+     * Уже скачанные файлы не трогаем.
+     *
+     * @return «есть (N)» или пусто
+     */
+    private String downloadCaseDocuments(Page card, Path docsDir, String caseNumber) {
+        waitForChronologyDocuments(card);
+        Map<String, String> links = collectPdfLinks(card);
+        if (links.isEmpty()) {
+            // ещё одна попытка: плюсик мог не раскрыться с первого раза
+            try {
+                card.evaluate(
+                        """
+                        () => document.querySelectorAll('div.b-collapse.js-collapse')
+                          .forEach(el => el.click())
+                        """
+                );
+                waitForChronologyDocuments(card);
+            } catch (Exception ignored) {
+            }
+            links = collectPdfLinks(card);
+        }
+        if (links.isEmpty()) {
+            System.out.println("No PDF links for " + caseNumber);
+            return "";
+        }
+        int kept = 0;
+        int downloaded = 0;
+        int skipped = 0;
+        for (Map.Entry<String, String> e : links.entrySet()) {
+            String url = e.getKey();
+            String fileName = e.getValue();
+            Path target = docsDir.resolve(fileName);
+            try {
+                if (Files.isRegularFile(target) && Files.size(target) > 500) {
+                    skipped++;
+                    kept++;
+                    System.out.println("Skip existing PDF: " + fileName);
+                    continue;
+                }
+                humanPause(card, 400, 900);
+                byte[] body = fetchPdfViaBrowser(url);
+                if (body == null) {
+                    System.out.println("PDF fail " + fileName);
+                    continue;
+                }
+                Files.write(target, body);
+                downloaded++;
+                kept++;
+                System.out.println("Saved PDF: " + target.getFileName() + " (" + body.length + " bytes)");
+            } catch (IllegalStateException ex) {
+                throw ex;
+            } catch (Exception ex) {
+                System.out.println("PDF download failed " + fileName + ": " + ex.getMessage());
+            }
+        }
+        System.out.println("Docs " + caseNumber + ": links=" + links.size()
+                + " saved=" + downloaded + " skipped=" + skipped);
+        return kept > 0 ? ("есть (" + kept + ")") : "";
+    }
+
+    /**
+     * PdfDocument: JS-антибот + Chrome PDF-viewer съедает тело ответа.
+     * Берём сырые байты через CDP Fetch (stage=Response) при реальном navigate.
+     */
+    private byte[] fetchPdfViaBrowser(String url) {
+        AtomicReference<byte[]> found = new AtomicReference<>();
+        AtomicBoolean hit429 = new AtomicBoolean(false);
+        Page docPage = context.newPage();
+        CDPSession cdp = null;
+        try {
+            cdp = context.newCDPSession(docPage);
+            JsonObject enable = new JsonObject();
+            JsonArray patterns = new JsonArray();
+            for (String pat : List.of("*Pdf*", "*pdf*")) {
+                JsonObject p = new JsonObject();
+                p.addProperty("urlPattern", pat);
+                p.addProperty("requestStage", "Response");
+                patterns.add(p);
+            }
+            enable.add("patterns", patterns);
+            cdp.send("Fetch.enable", enable);
+
+            CDPSession session = cdp;
+            cdp.on("Fetch.requestPaused", ev -> {
+                JsonObject o = GSON.toJsonTree(ev).getAsJsonObject();
+                String requestId = o.get("requestId").getAsString();
+                try {
+                    int status = o.has("responseStatusCode") ? o.get("responseStatusCode").getAsInt() : 0;
+                    if (status == 429) {
+                        hit429.set(true);
+                    }
+                    JsonObject bodyParams = new JsonObject();
+                    bodyParams.addProperty("requestId", requestId);
+                    Object bodyObj = session.send("Fetch.getResponseBody", bodyParams);
+                    JsonObject bodyJson = GSON.toJsonTree(bodyObj).getAsJsonObject();
+                    String bodyStr = bodyJson.get("body").getAsString();
+                    boolean b64 = bodyJson.has("base64Encoded")
+                            && bodyJson.get("base64Encoded").getAsBoolean();
+                    byte[] bytes = b64
+                            ? Base64.getDecoder().decode(bodyStr)
+                            : bodyStr.getBytes(StandardCharsets.ISO_8859_1);
+                    if (isPdfMagic(bytes) && bytes.length > 1000) {
+                        found.compareAndSet(null, bytes);
+                    }
+                } catch (Exception e) {
+                    // challenge/html often pauses before body is ready — just continue
+                } finally {
+                    try {
+                        JsonObject cont = new JsonObject();
+                        cont.addProperty("requestId", requestId);
+                        session.send("Fetch.continueRequest", cont);
+                    } catch (Exception ignored) {
+                    }
+                }
+            });
+
+            try {
+                docPage.navigate(url, new Page.NavigateOptions()
+                        .setWaitUntil(WaitUntilState.COMMIT)
+                        .setTimeout(60_000));
+            } catch (Exception e) {
+                System.out.println("PDF navigate: " + e.getMessage());
+            }
+            for (int i = 0; i < 60 && found.get() == null && !hit429.get(); i++) {
+                docPage.waitForTimeout(250);
+            }
+            if (hit429.get()) {
+                throw httpError(429, "PdfDocument");
+            }
+            byte[] body = found.get();
+            if (body == null) {
+                System.out.println("PDF not captured after browser navigate: " + url);
+            }
+            return body;
+        } finally {
+            if (cdp != null) {
+                try {
+                    cdp.send("Fetch.disable");
+                } catch (Exception ignored) {
+                }
+                try {
+                    cdp.detach();
+                } catch (Exception ignored) {
+                }
+            }
+            closeQuietly(docPage);
+        }
+    }
+
+    private static boolean isPdfMagic(byte[] bytes) {
+        return bytes != null && bytes.length >= 5
+                && bytes[0] == '%' && bytes[1] == 'P' && bytes[2] == 'D' && bytes[3] == 'F';
+    }
+
+    /** url → fileName из пути PdfDocument (уникальные). */
+    private Map<String, String> collectPdfLinks(Page card) {
+        Map<String, String> out = new LinkedHashMap<>();
+        Object raw = card.evaluate(
+                """
+                () => {
+                  const seen = new Set();
+                  const items = [];
+                  for (const a of document.querySelectorAll('a[href*="PdfDocument"]')) {
+                    const href = a.href || '';
+                    if (!href || seen.has(href)) continue;
+                    seen.add(href);
+                    let file = href.split('/').pop() || '';
+                    try { file = decodeURIComponent(file.split('?')[0] || ''); } catch (e) {}
+                    if (!file.toLowerCase().endsWith('.pdf')) file = file + '.pdf';
+                    items.push({ href, fileName: file });
+                  }
+                  return JSON.stringify(items);
+                }
+                """
+        );
+        if (raw == null) {
+            return out;
+        }
+        String json = raw.toString();
+        if (json.isBlank() || "null".equals(json)) {
+            return out;
+        }
+        JsonArray arr = GSON.fromJson(json, JsonArray.class);
+        if (arr == null) {
+            return out;
+        }
+        for (JsonElement el : arr) {
+            if (!el.isJsonObject()) {
+                continue;
+            }
+            JsonObject o = el.getAsJsonObject();
+            String href = o.has("href") ? o.get("href").getAsString() : "";
+            String fileName = o.has("fileName") ? o.get("fileName").getAsString() : "";
+            if (href.isBlank() || fileName.isBlank()) {
+                continue;
+            }
+            out.putIfAbsent(href, sanitizeFileName(fileName));
+        }
+        return out;
+    }
+
+    private static String sanitizeFileName(String name) {
+        String n = name.replace('\u00A0', ' ').trim();
+        n = n.replaceAll("[\\\\/:*?\"<>|]", "_");
+        if (n.length() > 180) {
+            int dot = n.lastIndexOf('.');
+            String ext = dot > 0 ? n.substring(dot) : "";
+            n = n.substring(0, Math.min(180, n.length() - ext.length())) + ext;
+        }
+        return n;
     }
 
     private static void closeQuietly(Page tab) {

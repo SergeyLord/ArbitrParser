@@ -84,6 +84,7 @@ public final class StatusExcelWriter {
             requireCol(cols, "ourSide");
             requireCol(cols, "otherSides");
             requireCol(cols, "court");
+            ensureDocumentsColumn(sheet, headerRowIdx, cols);
 
             int firstDataRow = headerRowIdx + 1;
             int caseCol = cols.get("caseNumber");
@@ -176,6 +177,9 @@ public final class StatusExcelWriter {
         if (cols.containsKey("claimSum")) {
             writeClaimSum(row, cols.get("claimSum"), mapped.claimSum(), styles, claimFormat, Mark.RED);
         }
+        if (cols.containsKey("documents") && mapped.documents() != null && !mapped.documents().isBlank()) {
+            writeText(row, cols.get("documents"), mapped.documents(), styles, Mark.RED);
+        }
     }
 
     private static void updateExistingRow(
@@ -195,6 +199,9 @@ public final class StatusExcelWriter {
         }
         if (cols.containsKey("claimSum")) {
             upsertClaimSum(row, cols.get("claimSum"), mapped.claimSum(), styles, claimFormat);
+        }
+        if (cols.containsKey("documents") && mapped.documents() != null && !mapped.documents().isBlank()) {
+            upsertText(row, cols.get("documents"), mapped.documents(), styles);
         }
     }
 
@@ -601,6 +608,8 @@ public final class StatusExcelWriter {
             } else if (raw.contains("цена иска") || raw.contains("сумма иска")
                     || (raw.contains("исков") && raw.contains("руб"))) {
                 map.putIfAbsent("claimSum", c);
+            } else if (raw.equals("документы") || raw.startsWith("документ")) {
+                map.putIfAbsent("documents", c);
             }
         }
         map.putIfAbsent("rowNum", 0);
@@ -611,6 +620,24 @@ public final class StatusExcelWriter {
         map.putIfAbsent("court", 14);
         map.putIfAbsent("hearing", 15);
         return map;
+    }
+
+    /** Если колонки «Документы» нет — добавляем в конец строки заголовков. */
+    private static void ensureDocumentsColumn(Sheet sheet, int headerRowIdx, Map<String, Integer> cols) {
+        if (cols.containsKey("documents")) {
+            return;
+        }
+        Row header = sheet.getRow(headerRowIdx);
+        if (header == null) {
+            header = sheet.createRow(headerRowIdx);
+        }
+        int col = header.getLastCellNum() < 0 ? 0 : header.getLastCellNum();
+        Cell cell = header.getCell(col);
+        if (cell == null) {
+            cell = header.createCell(col);
+        }
+        cell.setCellValue("Документы");
+        cols.put("documents", col);
     }
 
     private static boolean isCaseNumberHeader(String v) {

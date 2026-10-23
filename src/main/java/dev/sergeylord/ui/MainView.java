@@ -335,8 +335,12 @@ public final class MainView {
                     Platform.runLater(() -> showProgress(0, 1, "Поиск дел…"));
                     List<KadCase> cases = client.searchByParticipant(inn, caseLimit, yearFrom);
 
-                    updateMessage("Карточки дел…");
-                    cases = client.enrichWithHearings(cases, (current, total, msg) -> {
+                    Path docsDir = Path.of(excelPath).toAbsolutePath().getParent()
+                            .resolve("kad.arbitr документы");
+                    Files.createDirectories(docsDir);
+
+                    updateMessage("Карточки и документы…");
+                    cases = client.enrichWithHearings(cases, docsDir, (current, total, msg) -> {
                         updateMessage(msg);
                         updateProgress(current, total);
                         Platform.runLater(() -> showProgress(current, total, msg));
@@ -347,6 +351,9 @@ public final class MainView {
                             .count();
                     long withClaimSum = cases.stream()
                             .filter(c -> c.claimSum() != null && !c.claimSum().isBlank())
+                            .count();
+                    long withDocs = cases.stream()
+                            .filter(c -> c.documents() != null && !c.documents().isBlank())
                             .count();
 
                     updateMessage("Запись в Excel…");
@@ -368,6 +375,7 @@ public final class MainView {
                                     + "Дел: " + cases.size()
                                     + ", заседаний: " + withHearing
                                     + ", сумма иска: " + withClaimSum
+                                    + ", с документами: " + withDocs
                                     + ", строк в Excel: " + written
                                     + " → " + Path.of(excelPath).getFileName()
                     );

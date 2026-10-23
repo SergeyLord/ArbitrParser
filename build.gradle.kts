@@ -1,4 +1,4 @@
-plugins {
+﻿plugins {
     id("java")
     application
     id("org.openjfx.javafxplugin") version "0.1.0"
@@ -61,12 +61,22 @@ tasks.register<JavaExec>("playwrightInstall") {
     args("install", "chromium")
 }
 
+tasks.register<JavaExec>("smokeDocs") {
+    group = "debug"
+    description = "Smoke: download PDF for A67-9933/2026"
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("dev.sergeylord.tools.SmokeDocs")
+    javaLauncher.set(javaToolchains.launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(21))
+    })
+}
+
 /**
- * Windows app-image с ArbitrParser.exe (jpackage + JDK 21 runtime).
+ * Windows app-image with ArbitrParser.exe (jpackage + JDK 21 runtime).
  *
  *   gradlew packageExe
  *
- * Результат: build/jpackage/ArbitrParser/ArbitrParser.exe
+ * Result: build/jpackage/ArbitrParser/ArbitrParser.exe
  */
 tasks.register("packageExe") {
     group = "distribution"
@@ -74,7 +84,7 @@ tasks.register("packageExe") {
     dependsOn("installDist")
 
     doLast {
-        // Берём JDK из toolchain компиляции (не из PATH — там может быть Java 17)
+        // JDK from compile toolchain (PATH may have Java 17)
         val jdkHome = javaToolchains.launcherFor {
             languageVersion.set(JavaLanguageVersion.of(21))
         }.get().metadata.installationPath.asFile

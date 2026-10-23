@@ -9,7 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
-/** Консольный режим (отладка): --console [ИНН] [--headless] [--pages=N] */
+/** Консольный режим (отладка): --console [ИНН] [--headless] [--limit=N] [--pages=N] */
 public final class ConsoleRunner {
 
     private ConsoleRunner() {
@@ -18,7 +18,7 @@ public final class ConsoleRunner {
     public static void run(String[] args) {
         String inn = AppDefaults.DEFAULT_INN;
         boolean headless = false;
-        int pages = 1;
+        int maxCases = 25;
 
         for (String arg : args) {
             if ("--console".equalsIgnoreCase(arg)) {
@@ -28,8 +28,10 @@ public final class ConsoleRunner {
                 headless = false;
             } else if ("--headless".equalsIgnoreCase(arg)) {
                 headless = true;
+            } else if (arg.startsWith("--limit=")) {
+                maxCases = Integer.parseInt(arg.substring("--limit=".length()));
             } else if (arg.startsWith("--pages=")) {
-                pages = Integer.parseInt(arg.substring("--pages=".length()));
+                maxCases = Integer.parseInt(arg.substring("--pages=".length())) * 25;
             } else if (!arg.startsWith("-")) {
                 inn = arg.trim();
             }
@@ -38,10 +40,11 @@ public final class ConsoleRunner {
         System.out.println("=== ArbitrParser console ===");
         System.out.println("Query: " + inn);
         System.out.println("Mode: " + (headless ? "headless" : "headed"));
+        System.out.println("Limit: " + maxCases);
 
         try (KadSearchClient client = new KadSearchClient(headless)) {
             client.warmUp();
-            List<KadCase> cases = client.searchByParticipant(inn, pages);
+            List<KadCase> cases = client.searchByParticipant(inn, maxCases);
 
             StringBuilder out = new StringBuilder();
             out.append("=== Result (").append(cases.size()).append(") ===\n");

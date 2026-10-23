@@ -96,6 +96,11 @@ tasks.register("packageExe") {
             appImage.deleteRecursively()
         }
 
+        val iconFile = file("packaging/app.ico")
+        if (!iconFile.exists()) {
+            throw GradleException("App icon not found: ${iconFile.absolutePath}")
+        }
+
         exec {
             commandLine(
                 jpackage.absolutePath,
@@ -106,6 +111,7 @@ tasks.register("packageExe") {
                 "--main-jar", mainJar.name,
                 "--main-class", "dev.sergeylord.Main",
                 "--dest", outDir.absolutePath,
+                "--icon", iconFile.absolutePath,
                 "--java-options", "-Dfile.encoding=UTF-8",
                 "--java-options", "-Dconsole.encoding=UTF-8"
             )

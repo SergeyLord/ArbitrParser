@@ -13,6 +13,10 @@ public final class UserSettings {
 
     public String inn = AppDefaults.DEFAULT_INN;
     public String excelPath = "";
+    /** Сколько дел обрабатывать (0 = все найденные). */
+    public int caseLimit = 3;
+    /** Парсить дела с этого года регистрации (включительно). */
+    public int yearFrom = 2025;
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 

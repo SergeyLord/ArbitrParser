@@ -65,7 +65,7 @@ public final class KadSearchClient implements AutoCloseable {
                 .setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
         System.out.println("HTTP navigate: " + (nav == null ? "?" : nav.status()));
         page.waitForLoadState(LoadState.DOMCONTENTLOADED);
-        humanPause(1_500, 3_000);
+        humanPause(300, 600);
         dismissPromoModal();
         System.out.println("Title: " + page.title());
         dumpDebug("warmup");
@@ -73,7 +73,15 @@ public final class KadSearchClient implements AutoCloseable {
         System.out.println("Session ready");
     }
 
-    public List<KadCase> searchByParticipant(String innOrName, int maxPages) {
+    /**
+     * Поиск по участнику. Грузит страницы выдачи, пока не наберётся {@code maxCases}
+     * дел с годом регистрации &gt;= {@code yearFrom} (или все, если {@code maxCases <= 0}).
+     */
+    public List<KadCase> searchByParticipant(String innOrName, int maxCases) {
+        return searchByParticipant(innOrName, maxCases, 0);
+    }
+
+    public List<KadCase> searchByParticipant(String innOrName, int maxCases, int yearFrom) {
         ensureWarm();
         commitParticipantTag(innOrName);
 
@@ -96,36 +104,79 @@ public final class KadSearchClient implements AutoCloseable {
 
         if (searchResponse.status() != 200) {
             dumpDebug("bad-status");
-            throw new IllegalStateException("SearchInstances HTTP " + searchResponse.status());
+            throw httpError(searchResponse.status(), "SearchInstances");
         }
 
         String html = searchResponse.text();
         saveText("search-page1.html", html);
 
         int total = readHiddenInt(html, "documentsTotalCount");
-        int pagesCount = readHiddenInt(html, "documentsPagesCount");
-        int pagesToLoad = Math.min(maxPages, Math.max(pagesCount, 1));
-        System.out.printf("Found cases: %d (pages: %d, loading: %d)%n", total, pagesCount, pagesToLoad);
+        int pagesCount = Math.max(readHiddenInt(html, "documentsPagesCount"), 1);
+        System.out.printf("Found cases: %d (pages: %d), limit: %s, yearFrom: %s%n",
+                total, pagesCount,
+                maxCases <= 0 ? "all" : String.valueOf(maxCases),
+                yearFrom > 0 ? String.valueOf(yearFrom) : "any");
 
-        List<KadCase> all = new ArrayList<>(parseCasesHtml(html));
-        System.out.println("Parsed from page 1: " + all.size());
+        List<KadCase> all = new ArrayList<>();
+        int rawPage1 = addFiltered(all, parseCasesHtml(html), yearFrom, maxCases);
+        System.out.println("Page 1: raw=" + rawPage1 + ", kept=" + all.size());
 
-        for (int p = 2; p <= pagesToLoad; p++) {
+        for (int p = 2; p <= pagesCount; p++) {
+            if (maxCases > 0 && all.size() >= maxCases) {
+                break;
+            }
             final int pageNum = p;
-            System.out.println("Loading page " + pageNum + "...");
+            System.out.println("Loading page " + pageNum + " / " + pagesCount + "...");
             humanPause(900, 2_000);
             Response next = page.waitForResponse(
                     r -> r.url().contains("SearchInstances") && r.request().method().equalsIgnoreCase("POST"),
                     () -> page.locator("#pages a[href='#page" + pageNum + "']").first().click()
             );
             if (next.status() != 200) {
-                break;
+                System.out.println("Page " + pageNum + " HTTP " + next.status() + " — stop");
+                throw httpError(next.status(), "SearchInstances page " + pageNum);
             }
-            all.addAll(parseCasesHtml(next.text()));
+            int before = all.size();
+            int raw = addFiltered(all, parseCasesHtml(next.text()), yearFrom, maxCases);
+            System.out.println("Page " + pageNum + ": raw=" + raw + ", kept +" + (all.size() - before)
+                    + " (total: " + all.size() + ")");
         }
+
+        System.out.println("Cases to process: " + all.size());
 
         dumpDebug("after-search");
         return all;
+    }
+
+    /** Добавляет дела с годом &gt;= yearFrom, пока не упрёмся в maxCases. */
+    private static int addFiltered(List<KadCase> dest, List<KadCase> chunk, int yearFrom, int maxCases) {
+        int raw = chunk.size();
+        for (KadCase c : chunk) {
+            if (maxCases > 0 && dest.size() >= maxCases) {
+                break;
+            }
+            int y = registrationYear(c);
+            if (yearFrom > 0 && y > 0 && y < yearFrom) {
+                continue;
+            }
+            dest.add(c);
+        }
+        return raw;
+    }
+
+    /** Год регистрации из даты списка КАД (дд.мм.гггг). 0 если не разобрали. */
+    static int registrationYear(KadCase c) {
+        if (c == null || c.date() == null || c.date().isBlank()) {
+            return 0;
+        }
+        Matcher m = Pattern.compile("(20\\d{2}|19\\d{2})").matcher(c.date());
+        if (m.find()) {
+            try {
+                return Integer.parseInt(m.group(1));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return 0;
     }
 
     private void commitParticipantTag(String innOrName) {
@@ -134,12 +185,11 @@ public final class KadSearchClient implements AutoCloseable {
         // Поле ввода нового тега — textarea без disabled внутри #sug-participants
         Locator textarea = page.locator("#sug-participants textarea:not([disabled])").first();
         textarea.click();
-        // Важно: pressSequentially шлёт keydown/keyup — fill() КАД часто игнорирует
         textarea.press("Control+A");
         textarea.press("Backspace");
-        // Печать «как человек»: разный интервал между символами
+        // Печать по символам (Ctrl+V иногда хуже воспринимается антиботом)
         textarea.pressSequentially(innOrName, new Locator.PressSequentiallyOptions()
-                .setDelay(ThreadLocalRandom.current().nextInt(35, 90)));
+                .setDelay(ThreadLocalRandom.current().nextInt(40, 100)));
         humanPause(400, 900);
         textarea.press("Enter");
         humanPause(700, 1_500);
@@ -293,10 +343,10 @@ public final class KadSearchClient implements AutoCloseable {
                         tab.bringToFront();
                         try {
                             tab.waitForLoadState(LoadState.DOMCONTENTLOADED,
-                                    new Page.WaitForLoadStateOptions().setTimeout(15_000));
+                                    new Page.WaitForLoadStateOptions().setTimeout(10_000));
                         } catch (Exception ignored) {
                         }
-                        tab.waitForTimeout(1_000);
+                        tab.waitForTimeout(250);
                         hearing = extractNextHearing(tab);
                         expandChronologyPlus(tab);
                         claimSum = extractClaimSum(tab);
@@ -334,7 +384,7 @@ public final class KadSearchClient implements AutoCloseable {
     private String extractNextHearing(Page card) {
         try {
             card.locator(".b-instanceAdditional").first()
-                    .waitFor(new Locator.WaitForOptions().setTimeout(5_000));
+                    .waitFor(new Locator.WaitForOptions().setTimeout(1_500));
         } catch (Exception ignored) {
             // блока может не быть (нет назначенного заседания)
         }
@@ -364,9 +414,9 @@ public final class KadSearchClient implements AutoCloseable {
                     "div.b-collapse.js-collapse[title*='полной хронологией'], "
                             + "div.b-collapse.js-collapse"
             ).first();
-            plus.waitFor(new Locator.WaitForOptions().setTimeout(5_000));
-            plus.click(new Locator.ClickOptions().setTimeout(5_000));
-            card.waitForTimeout(800);
+            plus.waitFor(new Locator.WaitForOptions().setTimeout(2_000));
+            plus.click(new Locator.ClickOptions().setTimeout(2_000));
+            card.waitForTimeout(300);
         } catch (Exception e) {
             System.out.println("Chronology plus click failed: " + e.getMessage());
             try {
@@ -383,7 +433,7 @@ public final class KadSearchClient implements AutoCloseable {
                         """
                 );
                 System.out.println("Chronology plus JS: " + viaJs);
-                card.waitForTimeout(800);
+                card.waitForTimeout(300);
             } catch (Exception e2) {
                 System.out.println("Chronology plus JS failed: " + e2.getMessage());
             }
@@ -396,11 +446,11 @@ public final class KadSearchClient implements AutoCloseable {
     private String extractClaimSum(Page card) {
         try {
             card.locator("text=/Сумма\\s+исковых\\s+требований/i").first()
-                    .waitFor(new Locator.WaitForOptions().setTimeout(8_000));
+                    .waitFor(new Locator.WaitForOptions().setTimeout(4_000));
         } catch (Exception ignored) {
             try {
                 card.locator(".additional-info").first()
-                        .waitFor(new Locator.WaitForOptions().setTimeout(3_000));
+                        .waitFor(new Locator.WaitForOptions().setTimeout(1_500));
             } catch (Exception ignored2) {
             }
         }
@@ -432,6 +482,13 @@ public final class KadSearchClient implements AutoCloseable {
             tab.close();
         } catch (Exception ignored) {
         }
+    }
+
+    private static IllegalStateException httpError(int status, String where) {
+        if (status == 429) {
+            return new IllegalStateException("429: сайт ограничил частоту запросов");
+        }
+        return new IllegalStateException(where + " HTTP " + status);
     }
 
     private static boolean looksLikeCourt(String value) {
@@ -479,16 +536,19 @@ public final class KadSearchClient implements AutoCloseable {
 
     private void dismissPromoModal(Page target) {
         target.keyboard().press("Escape");
-        humanPause(target, 200, 500);
+        humanPause(target, 80, 180);
         try {
             target.locator(".b-promo-modal .b-promo-modal-close, .js-modal-close")
                     .first()
-                    .click(new Locator.ClickOptions().setTimeout(1_500));
+                    .click(new Locator.ClickOptions().setTimeout(800));
         } catch (Exception ignored) {
         }
         target.keyboard().press("Escape");
-        humanPause(target, 200, 500);
+        humanPause(target, 80, 180);
     }
+
+    /** Множитель пауз: >1.0 = медленнее (+10% к текущим). */
+    private static final double PAUSE_SCALE = 0.99;
 
     /** Случайная пауза [minMs; maxMs), чтобы не стучать метрономом. */
     private void humanPause(int minMs, int maxMs) {
@@ -496,8 +556,8 @@ public final class KadSearchClient implements AutoCloseable {
     }
 
     private void humanPause(Page target, int minMs, int maxMs) {
-        int lo = Math.max(0, Math.min(minMs, maxMs));
-        int hi = Math.max(minMs, maxMs);
+        int lo = (int) Math.round(Math.max(0, Math.min(minMs, maxMs)) * PAUSE_SCALE);
+        int hi = (int) Math.round(Math.max(minMs, maxMs) * PAUSE_SCALE);
         int ms = (hi <= lo) ? lo : ThreadLocalRandom.current().nextInt(lo, hi);
         target.waitForTimeout(ms);
     }

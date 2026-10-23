@@ -27,7 +27,7 @@ public final class RulesDialog {
         dialog.setMinWidth(640);
         dialog.setMinHeight(480);
 
-        Label note = new Label("Список КАД + дата заседания + сумма иска с хронологии карточки.");
+        Label note = new Label("Excel обновляется по № дела: изменения/новые — красным, пропавшие — серым.");
         note.getStyleClass().add("status-muted");
 
         TableView<ColumnMapping.Rule> table = new TableView<>(

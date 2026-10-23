@@ -292,78 +292,92 @@ public final class KadSearchClient implements AutoCloseable {
         return cases;
     }
 
+    /** Сколько карточек держим открытыми одновременно (меньше нагрузка → меньше 429). */
+    private static final int CARD_TAB_BATCH = 5;
+
     /**
-     * 1) Открывает карточки во вкладках (пауза 0.2–0.5 с).
-     * 2) На каждой: дата из {@code .b-instanceAdditional}; плюсик хронологии → сумма из {@code .additional-info}.
+     * Карточки пачками по {@link #CARD_TAB_BATCH}: открыл вкладки → прочитал → закрыл → следующая пачка.
+     * На каждой: дата из {@code .b-instanceAdditional}; плюсик хронологии → сумма из {@code .additional-info}.
      */
     public List<KadCase> enrichWithHearings(List<KadCase> cases, ProgressListener progress) {
         ensureWarm();
         int total = cases.size();
         int steps = Math.max(total * 2, 1);
-        List<Page> tabs = new ArrayList<>(total);
-
-        for (int i = 0; i < total; i++) {
-            KadCase c = cases.get(i);
-            if (progress != null) {
-                progress.onProgress(i + 1, steps,
-                        "Открываю вкладку " + (i + 1) + " из " + total
-                                + (c.caseNumber().isBlank() ? "" : ": " + c.caseNumber()));
-            }
-            Page tab = null;
-            if (c.caseId() != null && !c.caseId().isBlank()) {
-                try {
-                    tab = context.newPage();
-                    tab.setDefaultTimeout(90_000);
-                    tab.navigate("https://kad.arbitr.ru/Card/" + c.caseId(),
-                            new Page.NavigateOptions().setWaitUntil(WaitUntilState.COMMIT));
-                } catch (Exception e) {
-                    System.out.println("Open tab failed for " + c.caseNumber() + ": " + e.getMessage());
-                    closeQuietly(tab);
-                    tab = null;
-                }
-            }
-            tabs.add(tab);
-            humanPause(page, 200, 500);
-        }
-
         List<KadCase> out = new ArrayList<>(total);
-        try {
-            for (int i = 0; i < total; i++) {
-                KadCase c = cases.get(i);
-                if (progress != null) {
-                    progress.onProgress(total + i + 1, steps,
-                            "Карточка " + (i + 1) + " из " + total
-                                    + (c.caseNumber().isBlank() ? "" : ": " + c.caseNumber()));
-                }
-                String hearing = "";
-                String claimSum = "";
-                Page tab = tabs.get(i);
-                if (tab != null) {
-                    try {
-                        tab.bringToFront();
-                        try {
-                            tab.waitForLoadState(LoadState.DOMCONTENTLOADED,
-                                    new Page.WaitForLoadStateOptions().setTimeout(10_000));
-                        } catch (Exception ignored) {
-                        }
-                        tab.waitForTimeout(250);
-                        hearing = extractNextHearing(tab);
-                        expandChronologyPlus(tab);
-                        claimSum = extractClaimSum(tab);
-                        System.out.println("Hearing " + c.caseNumber() + " = [" + hearing + "], "
-                                + "ClaimSum = [" + claimSum + "]");
-                    } catch (Exception e) {
-                        System.out.println("Card visit failed for " + c.caseNumber() + ": " + e.getMessage());
-                    } finally {
-                        closeQuietly(tab);
-                        tabs.set(i, null);
+
+        for (int batchStart = 0; batchStart < total; batchStart += CARD_TAB_BATCH) {
+            int batchEnd = Math.min(batchStart + CARD_TAB_BATCH, total);
+            int batchNo = batchStart / CARD_TAB_BATCH + 1;
+            int batchCount = (total + CARD_TAB_BATCH - 1) / CARD_TAB_BATCH;
+            System.out.println("Card batch " + batchNo + "/" + batchCount
+                    + " (cases " + (batchStart + 1) + "–" + batchEnd + " of " + total + ")");
+
+            List<Page> tabs = new ArrayList<>(batchEnd - batchStart);
+            try {
+                for (int i = batchStart; i < batchEnd; i++) {
+                    KadCase c = cases.get(i);
+                    if (progress != null) {
+                        progress.onProgress(i + 1, steps,
+                                "Открываю вкладку " + (i + 1) + " из " + total
+                                        + " (пачка " + batchNo + "/" + batchCount + ")"
+                                        + (c.caseNumber().isBlank() ? "" : ": " + c.caseNumber()));
                     }
+                    Page tab = null;
+                    if (c.caseId() != null && !c.caseId().isBlank()) {
+                        try {
+                            tab = context.newPage();
+                            tab.setDefaultTimeout(90_000);
+                            tab.navigate("https://kad.arbitr.ru/Card/" + c.caseId(),
+                                    new Page.NavigateOptions().setWaitUntil(WaitUntilState.COMMIT));
+                        } catch (Exception e) {
+                            System.out.println("Open tab failed for " + c.caseNumber() + ": " + e.getMessage());
+                            closeQuietly(tab);
+                            tab = null;
+                        }
+                    }
+                    tabs.add(tab);
+                    humanPause(page, 200, 500);
                 }
-                out.add(c.withCardDetails(hearing, claimSum));
+
+                for (int i = batchStart; i < batchEnd; i++) {
+                    KadCase c = cases.get(i);
+                    if (progress != null) {
+                        progress.onProgress(total + i + 1, steps,
+                                "Карточка " + (i + 1) + " из " + total
+                                        + " (пачка " + batchNo + "/" + batchCount + ")"
+                                        + (c.caseNumber().isBlank() ? "" : ": " + c.caseNumber()));
+                    }
+                    String hearing = "";
+                    String claimSum = "";
+                    Page tab = tabs.get(i - batchStart);
+                    if (tab != null) {
+                        try {
+                            tab.bringToFront();
+                            try {
+                                tab.waitForLoadState(LoadState.DOMCONTENTLOADED,
+                                        new Page.WaitForLoadStateOptions().setTimeout(10_000));
+                            } catch (Exception ignored) {
+                            }
+                            tab.waitForTimeout(250);
+                            hearing = extractNextHearing(tab);
+                            expandChronologyPlus(tab);
+                            claimSum = extractClaimSum(tab);
+                            System.out.println("Hearing " + c.caseNumber() + " = [" + hearing + "], "
+                                    + "ClaimSum = [" + claimSum + "]");
+                        } catch (Exception e) {
+                            System.out.println("Card visit failed for " + c.caseNumber() + ": " + e.getMessage());
+                        }
+                    }
+                    out.add(c.withCardDetails(hearing, claimSum));
+                }
+            } finally {
+                for (Page tab : tabs) {
+                    closeQuietly(tab);
+                }
             }
-        } finally {
-            for (Page tab : tabs) {
-                closeQuietly(tab);
+
+            if (batchEnd < total) {
+                humanPause(page, 400, 900);
             }
         }
 

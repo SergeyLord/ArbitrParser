@@ -315,6 +315,9 @@ public final class MainView {
                     long withHearing = cases.stream()
                             .filter(c -> c.nextHearing() != null && !c.nextHearing().isBlank())
                             .count();
+                    long withClaimSum = cases.stream()
+                            .filter(c -> c.claimSum() != null && !c.claimSum().isBlank())
+                            .count();
 
                     updateMessage("Запись в Excel…");
                     Platform.runLater(() -> showProgress(1, 1, "Запись в Excel…"));
@@ -333,6 +336,7 @@ public final class MainView {
                             (only3 ? "[тест 3] " : "")
                                     + "Дел: " + cases.size()
                                     + ", заседаний: " + withHearing
+                                    + ", сумма иска: " + withClaimSum
                                     + ", строк в Excel: " + written
                                     + " → " + Path.of(excelPath).getFileName()
                     );

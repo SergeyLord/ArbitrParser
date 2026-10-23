@@ -27,7 +27,7 @@ public final class RulesDialog {
         dialog.setMinWidth(640);
         dialog.setMinHeight(480);
 
-        Label note = new Label("Список КАД + дата заседания с карточки. Сумма иска пока отключена.");
+        Label note = new Label("Список КАД + дата заседания + сумма иска с хронологии карточки.");
         note.getStyleClass().add("status-muted");
 
         TableView<ColumnMapping.Rule> table = new TableView<>(

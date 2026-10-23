@@ -244,8 +244,7 @@ public final class KadSearchClient implements AutoCloseable {
 
     /**
      * 1) Открывает карточки во вкладках (пауза 0.2–0.5 с).
-     * 2) На каждой: дата из {@code .b-instanceAdditional} («Следующее заседание: …»), закрыть.
-     * Сумма иска / хронология пока не трогаем.
+     * 2) На каждой: дата из {@code .b-instanceAdditional}; плюсик хронологии → сумма из {@code .additional-info}.
      */
     public List<KadCase> enrichWithHearings(List<KadCase> cases, ProgressListener progress) {
         ensureWarm();
@@ -287,6 +286,7 @@ public final class KadSearchClient implements AutoCloseable {
                                     + (c.caseNumber().isBlank() ? "" : ": " + c.caseNumber()));
                 }
                 String hearing = "";
+                String claimSum = "";
                 Page tab = tabs.get(i);
                 if (tab != null) {
                     try {
@@ -298,7 +298,10 @@ public final class KadSearchClient implements AutoCloseable {
                         }
                         tab.waitForTimeout(1_000);
                         hearing = extractNextHearing(tab);
-                        System.out.println("Hearing " + c.caseNumber() + " = [" + hearing + "]");
+                        expandChronologyPlus(tab);
+                        claimSum = extractClaimSum(tab);
+                        System.out.println("Hearing " + c.caseNumber() + " = [" + hearing + "], "
+                                + "ClaimSum = [" + claimSum + "]");
                     } catch (Exception e) {
                         System.out.println("Card visit failed for " + c.caseNumber() + ": " + e.getMessage());
                     } finally {
@@ -306,7 +309,7 @@ public final class KadSearchClient implements AutoCloseable {
                         tabs.set(i, null);
                     }
                 }
-                out.add(c.withCardDetails(hearing, ""));
+                out.add(c.withCardDetails(hearing, claimSum));
             }
         } finally {
             for (Page tab : tabs) {
@@ -345,6 +348,75 @@ public final class KadSearchClient implements AutoCloseable {
                     const m = t.match(re);
                     if (m && m[1]) return m[1].replace(/\\s+,/g, ',').trim();
                   }
+                  return '';
+                }
+                """
+        );
+        return raw == null ? "" : raw.toString().trim();
+    }
+
+    /**
+     * Плюсик: {@code <div class="b-collapse js-collapse" title="Нажмите, чтобы ознакомиться с полной хронологией дела.">}
+     */
+    private void expandChronologyPlus(Page card) {
+        try {
+            Locator plus = card.locator(
+                    "div.b-collapse.js-collapse[title*='полной хронологией'], "
+                            + "div.b-collapse.js-collapse"
+            ).first();
+            plus.waitFor(new Locator.WaitForOptions().setTimeout(5_000));
+            plus.click(new Locator.ClickOptions().setTimeout(5_000));
+            card.waitForTimeout(800);
+        } catch (Exception e) {
+            System.out.println("Chronology plus click failed: " + e.getMessage());
+            try {
+                Object viaJs = card.evaluate(
+                        """
+                        () => {
+                          const el = document.querySelector(
+                            'div.b-collapse.js-collapse[title*="хронологией"]'
+                          ) || document.querySelector('div.b-collapse.js-collapse');
+                          if (!el) return 'none';
+                          el.click();
+                          return 'ok';
+                        }
+                        """
+                );
+                System.out.println("Chronology plus JS: " + viaJs);
+                card.waitForTimeout(800);
+            } catch (Exception e2) {
+                System.out.println("Chronology plus JS failed: " + e2.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Сумма: {@code <span class="additional-info">. Сумма исковых требований 17370467,19</span>}
+     */
+    private String extractClaimSum(Page card) {
+        try {
+            card.locator("text=/Сумма\\s+исковых\\s+требований/i").first()
+                    .waitFor(new Locator.WaitForOptions().setTimeout(8_000));
+        } catch (Exception ignored) {
+            try {
+                card.locator(".additional-info").first()
+                        .waitFor(new Locator.WaitForOptions().setTimeout(3_000));
+            } catch (Exception ignored2) {
+            }
+        }
+        Object raw = card.evaluate(
+                """
+                () => {
+                  const normalize = s => (s || '').replace(/\\s+/g, ' ').trim();
+                  const re = /Сумма\\s+исковых\\s+требований\\s*([0-9][0-9\\s\\u00A0]*(?:[.,][0-9]{1,2})?)/i;
+                  for (const el of document.querySelectorAll('.additional-info')) {
+                    const t = normalize(el.innerText || el.textContent);
+                    const m = t.match(re);
+                    if (m && m[1]) return m[1].replace(/[\\s\\u00A0]/g, '').replace(',', '.');
+                  }
+                  const body = normalize(document.body && document.body.innerText);
+                  const m2 = body.match(re);
+                  if (m2 && m2[1]) return m2[1].replace(/[\\s\\u00A0]/g, '').replace(',', '.');
                   return '';
                 }
                 """

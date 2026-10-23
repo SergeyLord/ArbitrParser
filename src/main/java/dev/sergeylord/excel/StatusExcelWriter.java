@@ -62,6 +62,8 @@ public final class StatusExcelWriter {
             int firstDataRow = headerRowIdx + 1;
             clearDataRows(sheet, firstDataRow);
 
+            CellStyle claimSumStyle = createClaimSumStyle(workbook);
+
             int written = 0;
             for (KadCase kadCase : cases) {
                 CaseRowMapper.MappedRow mapped = CaseRowMapper.map(kadCase, ourInn, written + 1);
@@ -80,7 +82,7 @@ public final class StatusExcelWriter {
                     setCell(row, cols.get("hearing"), mapped.nextHearing());
                 }
                 if (cols.containsKey("claimSum")) {
-                    setClaimSumCell(row, cols.get("claimSum"), mapped.claimSum());
+                    setClaimSumCell(row, cols.get("claimSum"), mapped.claimSum(), claimSumStyle);
                 }
                 written++;
             }
@@ -249,7 +251,19 @@ public final class StatusExcelWriter {
         cell.setCellValue(value);
     }
 
-    private static void setClaimSumCell(Row row, int col, String value) {
+    /** Бухгалтерский формат цены: пробел — тысячи, запятая — копейки. */
+    private static final String CLAIM_SUM_FORMAT =
+            "_-* # ##0,00_-;-* # ##0,00_-;_-* \"-\"??_-;_-@_-";
+
+    private static CellStyle createClaimSumStyle(Workbook workbook) {
+        CellStyle style = workbook.createCellStyle();
+        style.setWrapText(true);
+        style.setVerticalAlignment(VerticalAlignment.TOP);
+        style.setDataFormat(workbook.createDataFormat().getFormat(CLAIM_SUM_FORMAT));
+        return style;
+    }
+
+    private static void setClaimSumCell(Row row, int col, String value, CellStyle claimSumStyle) {
         if (value == null || value.isBlank()) {
             setCell(row, col, "");
             return;
@@ -261,6 +275,7 @@ public final class StatusExcelWriter {
                 cell = row.createCell(col, CellType.NUMERIC);
             }
             cell.setCellValue(num);
+            cell.setCellStyle(claimSumStyle);
         } catch (NumberFormatException e) {
             setCell(row, col, value);
         }

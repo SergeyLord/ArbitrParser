@@ -76,7 +76,9 @@ public final class StatusExcelWriter {
                 setCell(row, cols.get("ourSide"), mapped.ourSide());
                 setCell(row, cols.get("otherSides"), mapped.otherSides());
                 setCell(row, cols.get("court"), mapped.court());
-                // Дата очередного заседания — пока НЕ пишем (парсинг отключён)
+                if (cols.containsKey("hearing")) {
+                    setCell(row, cols.get("hearing"), mapped.nextHearing());
+                }
                 if (cols.containsKey("claimSum")) {
                     setClaimSumCell(row, cols.get("claimSum"), mapped.claimSum());
                 }

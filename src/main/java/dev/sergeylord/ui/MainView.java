@@ -312,6 +312,10 @@ public final class MainView {
                         Platform.runLater(() -> showProgress(current, total, msg));
                     });
 
+                    long withHearing = cases.stream()
+                            .filter(c -> c.nextHearing() != null && !c.nextHearing().isBlank())
+                            .count();
+
                     updateMessage("Запись в Excel…");
                     Platform.runLater(() -> showProgress(1, 1, "Запись в Excel…"));
                     int written = StatusExcelWriter.write(Path.of(excelPath), cases, inn);
@@ -328,6 +332,7 @@ public final class MainView {
                             Duration.between(started, finished).toMillis(),
                             (only3 ? "[тест 3] " : "")
                                     + "Дел: " + cases.size()
+                                    + ", заседаний: " + withHearing
                                     + ", строк в Excel: " + written
                                     + " → " + Path.of(excelPath).getFileName()
                     );

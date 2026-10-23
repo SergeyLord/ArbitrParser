@@ -2,7 +2,7 @@ package dev.sergeylord.kad;
 
 import java.util.List;
 
-/** Дело из списка КАД + поля с карточки (сумма иска; nextHearing пока не заполняем). */
+/** Дело из списка КАД + поля с карточки (nextHearing; сумма иска пока не заполняем). */
 public record KadCase(
         String caseId,
         String caseNumber,

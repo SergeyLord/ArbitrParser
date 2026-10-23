@@ -244,8 +244,8 @@ public final class KadSearchClient implements AutoCloseable {
 
     /**
      * 1) Открывает карточки во вкладках (пауза 0.2–0.5 с).
-     * 2) На каждой: bringToFront → ждать 1 с → закрыть.
-     * Парсинг хронологии / суммы иска / даты — временно отключён.
+     * 2) На каждой: дата из {@code .b-instanceAdditional} («Следующее заседание: …»), закрыть.
+     * Сумма иска / хронология пока не трогаем.
      */
     public List<KadCase> enrichWithHearings(List<KadCase> cases, ProgressListener progress) {
         ensureWarm();
@@ -286,11 +286,19 @@ public final class KadSearchClient implements AutoCloseable {
                             "Карточка " + (i + 1) + " из " + total
                                     + (c.caseNumber().isBlank() ? "" : ": " + c.caseNumber()));
                 }
+                String hearing = "";
                 Page tab = tabs.get(i);
                 if (tab != null) {
                     try {
                         tab.bringToFront();
+                        try {
+                            tab.waitForLoadState(LoadState.DOMCONTENTLOADED,
+                                    new Page.WaitForLoadStateOptions().setTimeout(15_000));
+                        } catch (Exception ignored) {
+                        }
                         tab.waitForTimeout(1_000);
+                        hearing = extractNextHearing(tab);
+                        System.out.println("Hearing " + c.caseNumber() + " = [" + hearing + "]");
                     } catch (Exception e) {
                         System.out.println("Card visit failed for " + c.caseNumber() + ": " + e.getMessage());
                     } finally {
@@ -298,7 +306,7 @@ public final class KadSearchClient implements AutoCloseable {
                         tabs.set(i, null);
                     }
                 }
-                out.add(c.withCardDetails("", ""));
+                out.add(c.withCardDetails(hearing, ""));
             }
         } finally {
             for (Page tab : tabs) {
@@ -314,6 +322,34 @@ public final class KadSearchClient implements AutoCloseable {
         } catch (Exception ignored) {
         }
         return out;
+    }
+
+    /**
+     * Дата из блока карточки:
+     * {@code <div class="b-instanceAdditional">… Следующее заседание: 01.12.2026, 10:20 , зал №1</div>}
+     */
+    private String extractNextHearing(Page card) {
+        try {
+            card.locator(".b-instanceAdditional").first()
+                    .waitFor(new Locator.WaitForOptions().setTimeout(5_000));
+        } catch (Exception ignored) {
+            // блока может не быть (нет назначенного заседания)
+        }
+        Object raw = card.evaluate(
+                """
+                () => {
+                  const blocks = [...document.querySelectorAll('.b-instanceAdditional')];
+                  const re = /Следующее\\s+заседание:\\s*(.+)/i;
+                  for (const el of blocks) {
+                    const t = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+                    const m = t.match(re);
+                    if (m && m[1]) return m[1].replace(/\\s+,/g, ',').trim();
+                  }
+                  return '';
+                }
+                """
+        );
+        return raw == null ? "" : raw.toString().trim();
     }
 
     private static void closeQuietly(Page tab) {

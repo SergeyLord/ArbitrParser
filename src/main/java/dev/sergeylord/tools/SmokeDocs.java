@@ -34,6 +34,7 @@ public final class SmokeDocs {
                 List.of(new Party("y", "")),
                 "",
                 "",
+                "",
                 ""
         );
 

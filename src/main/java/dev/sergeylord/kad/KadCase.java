@@ -14,15 +14,20 @@ public record KadCase(
         List<Party> respondents,
         String nextHearing,
         String claimSum,
-        String documents
+        String documents,
+        /** Абсолютный путь к первому PDF (для гиперссылки в Excel), иначе пусто. */
+        String documentsLink
 ) {
-    public KadCase withCardDetails(String hearing, String claimSum, String documents) {
+    public KadCase withCardDetails(
+            String hearing, String claimSum, String documents, String documentsLink
+    ) {
         return new KadCase(
                 caseId, caseNumber, caseType, courtName, judge, date,
                 plaintiffs, respondents,
                 hearing == null ? "" : hearing,
                 claimSum == null ? "" : claimSum,
-                documents == null ? "" : documents
+                documents == null ? "" : documents,
+                documentsLink == null ? "" : documentsLink
         );
     }
 }

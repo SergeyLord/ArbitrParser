@@ -75,7 +75,30 @@
     -fx-background-color: #d7e2f0;
 }
 
+.status-area {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-focus-color: transparent;
+    -fx-faint-focus-color: transparent;
+    -fx-background-insets: 0;
+    -fx-padding: 2 0 2 0;
+    -fx-font-size: 13px;
+}
+
+.status-area .content {
+    -fx-background-color: transparent;
+}
+
+.status-area .scroll-pane,
+.status-area .scroll-pane .viewport {
+    -fx-background-color: transparent;
+}
+
 .status-ok {
+    -fx-text-fill: #1b7f4a;
+}
+
+.status-ok .content {
     -fx-text-fill: #1b7f4a;
 }
 
@@ -83,11 +106,23 @@
     -fx-text-fill: #b42318;
 }
 
+.status-error .content {
+    -fx-text-fill: #b42318;
+}
+
 .status-running {
     -fx-text-fill: #b54708;
 }
 
+.status-running .content {
+    -fx-text-fill: #b54708;
+}
+
 .status-muted {
+    -fx-text-fill: #667788;
+}
+
+.status-muted .content {
     -fx-text-fill: #667788;
 }
 

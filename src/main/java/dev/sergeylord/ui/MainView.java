@@ -23,6 +23,7 @@ import javafx.scene.control.Label;
 import javafx.scene.control.ProgressBar;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
+import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.control.Tooltip;
 import javafx.scene.layout.BorderPane;
@@ -55,7 +56,7 @@ public final class MainView {
     private final BorderPane root = new BorderPane();
     private final TextField innField = new TextField();
     private final TextField excelField = new TextField();
-    private final Label statusLabel = new Label("");
+    private final TextArea statusLabel = new TextArea("");
     private final Label progressLabel = new Label("");
     private final ProgressBar progressBar = new ProgressBar(0);
     private final Button runButton = new Button("Запустить прогон");
@@ -164,7 +165,13 @@ public final class MainView {
         excelButton.getStyleClass().add("button-secondary");
         excelButton.setOnAction(e -> openExcelFile());
 
-        statusLabel.getStyleClass().add("status-muted");
+        statusLabel.getStyleClass().addAll("status-area", "status-muted");
+        statusLabel.setEditable(false);
+        statusLabel.setWrapText(true);
+        statusLabel.setFocusTraversable(true);
+        statusLabel.setPrefRowCount(3);
+        statusLabel.setMaxWidth(Double.MAX_VALUE);
+        statusLabel.setPromptText("Статус… (можно выделить и Ctrl+C)");
         progressLabel.getStyleClass().add("status-muted");
         progressBar.setMaxWidth(Double.MAX_VALUE);
         progressBar.setPrefHeight(14);
@@ -175,9 +182,6 @@ public final class MainView {
 
         HBox actions = new HBox(12, runButton, limitBox, yearBox, rulesButton, excelButton);
         actions.setAlignment(Pos.CENTER_LEFT);
-
-        statusLabel.setWrapText(true);
-        statusLabel.setMaxWidth(Double.MAX_VALUE);
 
         VBox progressBox = new VBox(4, progressLabel, progressBar);
         formCard.getChildren().addAll(form, actions, statusLabel, progressBox);
@@ -468,7 +472,7 @@ public final class MainView {
             case "running" -> statusLabel.getStyleClass().add("status-running");
             default -> statusLabel.getStyleClass().add("status-muted");
         }
-        statusLabel.setText(text);
+        statusLabel.setText(text == null ? "" : text);
     }
 
     private void showProgress(int current, int total, String message) {
@@ -488,7 +492,7 @@ public final class MainView {
     }
 
     private void alert(String msg) {
-        Alert a = new Alert(Alert.AlertType.WARNING, msg);
+        Alert a = new Alert(Alert.AlertType.WARNING, msg == null ? "" : msg);
         a.setHeaderText(null);
         a.setTitle("ArbitrParser");
         a.showAndWait();

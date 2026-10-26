@@ -11,6 +11,7 @@ import org.apache.poi.ss.usermodel.CreationHelper;
 import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.Drawing;
 import org.apache.poi.ss.usermodel.FillPatternType;
+import org.apache.poi.ss.usermodel.Font;
 import org.apache.poi.ss.usermodel.IndexedColors;
 import org.apache.poi.ss.usermodel.RichTextString;
 import org.apache.poi.ss.usermodel.Row;
@@ -119,7 +120,7 @@ public final class StatusExcelWriter {
                     if (row == null) {
                         row = sheet.createRow(appendAt);
                     }
-                    writeNewRow(row, cols, mapped, styles, claimFormat, headerLastCol);
+                    writeNewRow(row, cols, mapped, styles, claimFormat, headerLastCol, excelFile);
                     byCase.put(key, appendAt);
                     appendAt++;
                     nextRowNum++;
@@ -130,7 +131,7 @@ public final class StatusExcelWriter {
                     }
                     // дело снова в КАД — снимаем серую пометку «пропало»
                     clearGrayMarks(row, styles, headerLastCol);
-                    updateExistingRow(row, cols, mapped, styles, claimFormat);
+                    updateExistingRow(row, cols, mapped, styles, claimFormat, excelFile);
                 }
                 processed++;
             }
@@ -160,7 +161,8 @@ public final class StatusExcelWriter {
             CaseRowMapper.MappedRow mapped,
             StyleKit styles,
             short claimFormat,
-            short headerLastCol
+            short headerLastCol,
+            Path excelFile
     ) {
         // сначала вся строка красным, потом значения (чтобы формат цены не сбросился)
         paintRow(row, styles, Mark.RED, headerLastCol);
@@ -178,7 +180,8 @@ public final class StatusExcelWriter {
             writeClaimSum(row, cols.get("claimSum"), mapped.claimSum(), styles, claimFormat, Mark.RED);
         }
         if (cols.containsKey("documents") && mapped.documents() != null && !mapped.documents().isBlank()) {
-            writeText(row, cols.get("documents"), mapped.documents(), styles, Mark.RED);
+            writeDocumentsLink(row, cols.get("documents"), mapped.documents(), mapped.documentsLink(),
+                    excelFile, styles, Mark.RED);
         }
     }
 
@@ -187,7 +190,8 @@ public final class StatusExcelWriter {
             Map<String, Integer> cols,
             CaseRowMapper.MappedRow mapped,
             StyleKit styles,
-            short claimFormat
+            short claimFormat,
+            Path excelFile
     ) {
         // № п/п не трогаем при обновлении
         upsertText(row, cols.get("caseNumber"), mapped.caseNumber(), styles);
@@ -201,8 +205,84 @@ public final class StatusExcelWriter {
             upsertClaimSum(row, cols.get("claimSum"), mapped.claimSum(), styles, claimFormat);
         }
         if (cols.containsKey("documents") && mapped.documents() != null && !mapped.documents().isBlank()) {
-            upsertText(row, cols.get("documents"), mapped.documents(), styles);
+            upsertDocumentsLink(row, cols.get("documents"), mapped.documents(), mapped.documentsLink(),
+                    excelFile, styles);
         }
+    }
+
+    private static void upsertDocumentsLink(
+            Row row, int col, String label, String linkPath, Path excelFile, StyleKit styles
+    ) {
+        String oldVal = cellText(row, col);
+        Cell existing = row.getCell(col);
+        String oldFormula = "";
+        if (existing != null && existing.getCellType() == CellType.FORMULA) {
+            oldFormula = existing.getCellFormula();
+        }
+        String newFormula = documentsHyperlinkFormula(excelFile, linkPath, label);
+        if (sameText(oldVal, label) && sameText(oldFormula, newFormula)) {
+            return;
+        }
+        writeDocumentsLink(row, col, label, linkPath, excelFile, styles, Mark.RED);
+        setWasComment(row.getCell(col), oldVal);
+    }
+
+    /**
+     * «есть (N)» через формулу HYPERLINK — без XSSFHyperlink/URI (POI ругался на путь).
+     * Путь относительный от папки Excel.
+     */
+    private static void writeDocumentsLink(
+            Row row, int col, String label, String linkPath, Path excelFile, StyleKit styles, Mark mark
+    ) {
+        Cell cell = row.getCell(col);
+        if (cell == null) {
+            cell = row.createCell(col, CellType.STRING);
+        }
+        cell.setHyperlink(null);
+        String formula = documentsHyperlinkFormula(excelFile, linkPath, label);
+        if (!formula.isBlank()) {
+            cell.setCellFormula(formula);
+            cell.setCellStyle(styles.linkStyled(cell.getCellStyle(), mark));
+        } else {
+            cell.setCellValue(label == null ? "" : label);
+            cell.setCellStyle(styles.styled(cell.getCellStyle(), mark, (short) -1));
+        }
+    }
+
+    private static String documentsHyperlinkFormula(Path excelFile, String linkPath, String label) {
+        String rel = relativeDocPath(excelFile, linkPath);
+        if (rel.isBlank()) {
+            return "";
+        }
+        String shown = label == null || label.isBlank() ? "открыть" : label;
+        return "HYPERLINK(\"" + excelFormulaEscape(rel) + "\",\"" + excelFormulaEscape(shown) + "\")";
+    }
+
+    /** Относительный путь Excel → PDF (слэши как в Excel HYPERLINK). */
+    private static String relativeDocPath(Path excelFile, String linkPath) {
+        if (linkPath == null || linkPath.isBlank() || excelFile == null) {
+            return "";
+        }
+        Path pdf = Path.of(linkPath).toAbsolutePath().normalize();
+        if (!Files.isRegularFile(pdf)) {
+            return "";
+        }
+        Path excelDir = excelFile.toAbsolutePath().normalize().getParent();
+        if (excelDir == null) {
+            return pdf.toString().replace('\\', '/');
+        }
+        try {
+            Path rel = excelDir.relativize(pdf);
+            if (!rel.isAbsolute()) {
+                return rel.toString().replace('\\', '/');
+            }
+        } catch (IllegalArgumentException ignored) {
+        }
+        return pdf.toString().replace('\\', '/');
+    }
+
+    private static String excelFormulaEscape(String s) {
+        return s == null ? "" : s.replace("\"", "\"\"");
     }
 
     private static void upsertText(Row row, int col, String newValue, StyleKit styles) {
@@ -449,18 +529,27 @@ public final class StatusExcelWriter {
         return parseClaim(FMT.formatCellValue(cell));
     }
 
-    /** Кэш стилей: база + метка (+ опционально числовой формат). */
+    /** Кэш стилей: база + метка (+ опционально числовой формат / ссылка). */
     private static final class StyleKit {
         private final Workbook workbook;
         private final Map<String, CellStyle> cache = new HashMap<>();
+        private Font linkFont;
 
         StyleKit(Workbook workbook) {
             this.workbook = workbook;
         }
 
         CellStyle styled(CellStyle base, Mark mark, short dataFormat) {
+            return styled(base, mark, dataFormat, false);
+        }
+
+        CellStyle linkStyled(CellStyle base, Mark mark) {
+            return styled(base, mark, (short) -1, true);
+        }
+
+        private CellStyle styled(CellStyle base, Mark mark, short dataFormat, boolean link) {
             short baseIdx = base == null ? 0 : base.getIndex();
-            String key = baseIdx + "|" + mark + "|" + dataFormat;
+            String key = baseIdx + "|" + mark + "|" + dataFormat + "|" + link;
             return cache.computeIfAbsent(key, ignored -> {
                 CellStyle style = workbook.createCellStyle();
                 if (base != null) {
@@ -481,8 +570,20 @@ public final class StatusExcelWriter {
                 } else {
                     style.setFillPattern(FillPatternType.NO_FILL);
                 }
+                if (link) {
+                    style.setFont(linkFont());
+                }
                 return style;
             });
+        }
+
+        private Font linkFont() {
+            if (linkFont == null) {
+                linkFont = workbook.createFont();
+                linkFont.setUnderline(Font.U_SINGLE);
+                linkFont.setColor(IndexedColors.BLUE.getIndex());
+            }
+            return linkFont;
         }
     }
 

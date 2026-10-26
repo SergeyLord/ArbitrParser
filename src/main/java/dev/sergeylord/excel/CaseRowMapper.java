@@ -21,7 +21,8 @@ public final class CaseRowMapper {
             String court,
             String nextHearing,
             String claimSum,
-            String documents
+            String documents,
+            String documentsLink
     ) {
     }
 
@@ -62,7 +63,8 @@ public final class CaseRowMapper {
                 nullToEmpty(kadCase.courtName()),
                 nullToEmpty(kadCase.nextHearing()),
                 nullToEmpty(kadCase.claimSum()),
-                nullToEmpty(kadCase.documents())
+                nullToEmpty(kadCase.documents()),
+                nullToEmpty(kadCase.documentsLink())
         );
     }
 

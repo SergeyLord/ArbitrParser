@@ -297,6 +297,7 @@ public final class KadSearchClient implements AutoCloseable {
                     rolloverParties(tr.select("td.respondent .js-rolloverHtml")),
                     "",
                     "",
+                    "",
                     ""
             ));
         }
@@ -373,6 +374,7 @@ public final class KadSearchClient implements AutoCloseable {
                     String hearing = "";
                     String claimSum = "";
                     String documents = "";
+                    String documentsLink = "";
                     Page tab = tabs.get(i - batchStart);
                     if (tab != null) {
                         try {
@@ -387,7 +389,9 @@ public final class KadSearchClient implements AutoCloseable {
                             expandChronologyPlus(tab);
                             claimSum = extractClaimSum(tab);
                             if (docsDir != null) {
-                                documents = downloadCaseDocuments(tab, docsDir, c.caseNumber());
+                                DocDownload docs = downloadCaseDocuments(tab, docsDir, c.caseNumber());
+                                documents = docs.label();
+                                documentsLink = docs.linkPath();
                             }
                             System.out.println("Hearing " + c.caseNumber() + " = [" + hearing + "], "
                                     + "ClaimSum = [" + claimSum + "], Docs = [" + documents + "]");
@@ -395,7 +399,7 @@ public final class KadSearchClient implements AutoCloseable {
                             System.out.println("Card visit failed for " + c.caseNumber() + ": " + e.getMessage());
                         }
                     }
-                    out.add(c.withCardDetails(hearing, claimSum, documents));
+                    out.add(c.withCardDetails(hearing, claimSum, documents, documentsLink));
                 }
             } finally {
                 for (Page tab : tabs) {
@@ -535,14 +539,18 @@ public final class KadSearchClient implements AutoCloseable {
         return raw == null ? "" : raw.toString().trim();
     }
 
+    private record DocDownload(String label, String linkPath) {
+        static DocDownload empty() {
+            return new DocDownload("", "");
+        }
+    }
+
     /**
      * PDF после плюсика: ссылки {@code a.js-case-result-text--doc_link} (рядом title
      * {@code .js-judges-rollover} и часто {@code .g-valid_sign} «[Подписано]»).
      * Уже скачанные файлы не трогаем.
-     *
-     * @return «есть (N)» или пусто
      */
-    private String downloadCaseDocuments(Page card, Path docsDir, String caseNumber) {
+    private DocDownload downloadCaseDocuments(Page card, Path docsDir, String caseNumber) {
         waitForChronologyDocuments(card);
         Map<String, String> links = collectPdfLinks(card);
         if (links.isEmpty()) {
@@ -561,19 +569,23 @@ public final class KadSearchClient implements AutoCloseable {
         }
         if (links.isEmpty()) {
             System.out.println("No PDF links for " + caseNumber);
-            return "";
+            return DocDownload.empty();
         }
         int kept = 0;
         int downloaded = 0;
         int skipped = 0;
+        Path firstFile = null;
         for (Map.Entry<String, String> e : links.entrySet()) {
             String url = e.getKey();
             String fileName = e.getValue();
-            Path target = docsDir.resolve(fileName);
+            Path target = docsDir.resolve(fileName).toAbsolutePath().normalize();
             try {
                 if (Files.isRegularFile(target) && Files.size(target) > 500) {
                     skipped++;
                     kept++;
+                    if (firstFile == null) {
+                        firstFile = target;
+                    }
                     System.out.println("Skip existing PDF: " + fileName);
                     continue;
                 }
@@ -586,6 +598,9 @@ public final class KadSearchClient implements AutoCloseable {
                 Files.write(target, body);
                 downloaded++;
                 kept++;
+                if (firstFile == null) {
+                    firstFile = target;
+                }
                 System.out.println("Saved PDF: " + target.getFileName() + " (" + body.length + " bytes)");
             } catch (IllegalStateException ex) {
                 throw ex;
@@ -595,7 +610,10 @@ public final class KadSearchClient implements AutoCloseable {
         }
         System.out.println("Docs " + caseNumber + ": links=" + links.size()
                 + " saved=" + downloaded + " skipped=" + skipped);
-        return kept > 0 ? ("есть (" + kept + ")") : "";
+        if (kept <= 0 || firstFile == null) {
+            return DocDownload.empty();
+        }
+        return new DocDownload("есть (" + kept + ")", firstFile.toString());
     }
 
     /**

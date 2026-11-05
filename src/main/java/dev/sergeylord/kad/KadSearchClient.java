@@ -298,6 +298,7 @@ public final class KadSearchClient implements AutoCloseable {
                     "",
                     "",
                     "",
+                    "",
                     ""
             ));
         }
@@ -372,6 +373,7 @@ public final class KadSearchClient implements AutoCloseable {
                                         + (c.caseNumber().isBlank() ? "" : ": " + c.caseNumber()));
                     }
                     String hearing = "";
+                    String hearingHall = "";
                     String claimSum = "";
                     String documents = "";
                     String documentsLink = "";
@@ -385,7 +387,9 @@ public final class KadSearchClient implements AutoCloseable {
                             } catch (Exception ignored) {
                             }
                             tab.waitForTimeout(250);
-                            hearing = extractNextHearing(tab);
+                            HearingInfo hi = extractNextHearing(tab);
+                            hearing = hi.dateTime();
+                            hearingHall = hi.hall();
                             expandChronologyPlus(tab);
                             claimSum = extractClaimSum(tab);
                             if (docsDir != null) {
@@ -394,12 +398,13 @@ public final class KadSearchClient implements AutoCloseable {
                                 documentsLink = docs.linkPath();
                             }
                             System.out.println("Hearing " + c.caseNumber() + " = [" + hearing + "], "
+                                    + "Hall = [" + hearingHall + "], "
                                     + "ClaimSum = [" + claimSum + "], Docs = [" + documents + "]");
                         } catch (Exception e) {
                             System.out.println("Card visit failed for " + c.caseNumber() + ": " + e.getMessage());
                         }
                     }
-                    out.add(c.withCardDetails(hearing, claimSum, documents, documentsLink));
+                    out.add(c.withCardDetails(hearing, hearingHall, claimSum, documents, documentsLink));
                 }
             } finally {
                 for (Page tab : tabs) {
@@ -422,11 +427,18 @@ public final class KadSearchClient implements AutoCloseable {
         return out;
     }
 
+    /** Дата/время и зал из текста «Следующее заседание: …». */
+    record HearingInfo(String dateTime, String hall) {
+        static HearingInfo empty() {
+            return new HearingInfo("", "");
+        }
+    }
+
     /**
-     * Дата из блока карточки:
-     * {@code <div class="b-instanceAdditional">… Следующее заседание: 01.12.2026, 10:20 , зал №1</div>}
+     * Из {@code .b-instanceAdditional}: «Следующее заседание: 01.12.2026, 10:20 , зал №1»
+     * → дата/время отдельно, зал («Зал судебных заседаний № …») отдельно.
      */
-    private String extractNextHearing(Page card) {
+    private HearingInfo extractNextHearing(Page card) {
         try {
             card.locator(".b-instanceAdditional").first()
                     .waitFor(new Locator.WaitForOptions().setTimeout(1_500));
@@ -447,7 +459,24 @@ public final class KadSearchClient implements AutoCloseable {
                 }
                 """
         );
-        return raw == null ? "" : raw.toString().trim();
+        return splitHearing(raw == null ? "" : raw.toString().trim());
+    }
+
+    /** «01.12.2026, 10:20 , Зал судебных заседаний № 5079» → dateTime + hall. */
+    static HearingInfo splitHearing(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return HearingInfo.empty();
+        }
+        String t = raw.replace('\u00A0', ' ').replaceAll("\\s+", " ").trim();
+        Matcher m = Pattern.compile(
+                "^(\\d{2}\\.\\d{2}\\.\\d{4}\\s*,\\s*\\d{1,2}:\\d{2})\\s*,?\\s*(.*)$"
+        ).matcher(t);
+        if (!m.matches()) {
+            return new HearingInfo(t, "");
+        }
+        String dateTime = m.group(1).replaceAll("\\s*,\\s*", ", ").trim();
+        String hall = m.group(2) == null ? "" : m.group(2).replaceAll("^[,\\s]+", "").trim();
+        return new HearingInfo(dateTime, hall);
     }
 
     /**

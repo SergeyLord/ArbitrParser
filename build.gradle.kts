@@ -5,7 +5,7 @@
 }
 
 group = "dev.sergeylord"
-version = "1.0.0"
+version = "1.2.0"
 
 repositories {
     mavenCentral()
@@ -116,7 +116,7 @@ tasks.register("packageExe") {
                 jpackage.absolutePath,
                 "--type", "app-image",
                 "--name", "ArbitrParser",
-                "--app-version", "1.0.0",
+                "--app-version", "1.2.0",
                 "--input", distLib.absolutePath,
                 "--main-jar", mainJar.name,
                 "--main-class", "dev.sergeylord.Main",

@@ -20,6 +20,7 @@ public final class CaseRowMapper {
             String otherSides,
             String court,
             String nextHearing,
+            String hearingHall,
             String claimSum,
             String documents,
             String documentsLink
@@ -62,6 +63,7 @@ public final class CaseRowMapper {
                 otherSides,
                 nullToEmpty(kadCase.courtName()),
                 nullToEmpty(kadCase.nextHearing()),
+                nullToEmpty(kadCase.hearingHall()),
                 nullToEmpty(kadCase.claimSum()),
                 nullToEmpty(kadCase.documents()),
                 nullToEmpty(kadCase.documentsLink())

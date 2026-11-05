@@ -86,6 +86,7 @@ public final class StatusExcelWriter {
             requireCol(cols, "otherSides");
             requireCol(cols, "court");
             ensureDocumentsColumn(sheet, headerRowIdx, cols);
+            ensureHearingHallColumn(sheet, headerRowIdx, cols);
 
             int firstDataRow = headerRowIdx + 1;
             int caseCol = cols.get("caseNumber");
@@ -176,6 +177,9 @@ public final class StatusExcelWriter {
         if (cols.containsKey("hearing")) {
             writeText(row, cols.get("hearing"), mapped.nextHearing(), styles, Mark.RED);
         }
+        if (cols.containsKey("hearingHall") && mapped.hearingHall() != null && !mapped.hearingHall().isBlank()) {
+            writeText(row, cols.get("hearingHall"), mapped.hearingHall(), styles, Mark.RED);
+        }
         if (cols.containsKey("claimSum")) {
             writeClaimSum(row, cols.get("claimSum"), mapped.claimSum(), styles, claimFormat, Mark.RED);
         }
@@ -200,6 +204,9 @@ public final class StatusExcelWriter {
         upsertText(row, cols.get("court"), mapped.court(), styles);
         if (cols.containsKey("hearing")) {
             upsertText(row, cols.get("hearing"), mapped.nextHearing(), styles);
+        }
+        if (cols.containsKey("hearingHall") && mapped.hearingHall() != null && !mapped.hearingHall().isBlank()) {
+            upsertText(row, cols.get("hearingHall"), mapped.hearingHall(), styles);
         }
         if (cols.containsKey("claimSum")) {
             upsertClaimSum(row, cols.get("claimSum"), mapped.claimSum(), styles, claimFormat);
@@ -706,6 +713,9 @@ public final class StatusExcelWriter {
             } else if (raw.contains("очередного заседания") || raw.contains("дата и время заседания")
                     || (raw.contains("заседани") && raw.contains("дата"))) {
                 map.putIfAbsent("hearing", c);
+            } else if (raw.equals("заседание") || raw.startsWith("зал ")
+                    || raw.contains("зал судебных")) {
+                map.putIfAbsent("hearingHall", c);
             } else if (raw.contains("цена иска") || raw.contains("сумма иска")
                     || (raw.contains("исков") && raw.contains("руб"))) {
                 map.putIfAbsent("claimSum", c);
@@ -725,7 +735,18 @@ public final class StatusExcelWriter {
 
     /** Если колонки «Документы» нет — добавляем в конец строки заголовков. */
     private static void ensureDocumentsColumn(Sheet sheet, int headerRowIdx, Map<String, Integer> cols) {
-        if (cols.containsKey("documents")) {
+        ensureHeaderColumn(sheet, headerRowIdx, cols, "documents", "Документы");
+    }
+
+    /** Колонка «Заседание» под зал / хвост после даты-времени. */
+    private static void ensureHearingHallColumn(Sheet sheet, int headerRowIdx, Map<String, Integer> cols) {
+        ensureHeaderColumn(sheet, headerRowIdx, cols, "hearingHall", "Заседание");
+    }
+
+    private static void ensureHeaderColumn(
+            Sheet sheet, int headerRowIdx, Map<String, Integer> cols, String key, String title
+    ) {
+        if (cols.containsKey(key)) {
             return;
         }
         Row header = sheet.getRow(headerRowIdx);
@@ -737,8 +758,8 @@ public final class StatusExcelWriter {
         if (cell == null) {
             cell = header.createCell(col);
         }
-        cell.setCellValue("Документы");
-        cols.put("documents", col);
+        cell.setCellValue(title);
+        cols.put(key, col);
     }
 
     private static boolean isCaseNumberHeader(String v) {
